@@ -233,13 +233,25 @@ KDE/sddm logins keep working (patched via system PAM)."
 }
 
 sudo_pkg() {
-    # sudo flavor for the current config: only the sssd flavor can read
-    # sudoers rules from SSSD (plain security/sudo cannot).
+    # preferred sudo flavor for the current config: only the sssd flavor can
+    # read sudoers rules from SSSD (plain security/sudo cannot).
     if [ "$ENABLE_SUDO" = "yes" ]; then
         printf 'security/sudo-sssd'
     else
         printf 'security/sudo'
     fi
+}
+
+install_pkg_candidates() {
+    # install the first available of the given pkg names (newest name first,
+    # older fallbacks after); repo snapshots vary in what they carry.
+    for _p in "$@"; do
+        if run_or_dry pkg install -y "$_p"; then
+            return 0
+        fi
+        log "warning: package $_p not in repos; trying alternative"
+    done
+    return 1
 }
 
 sudo_supports_sss() {
@@ -267,8 +279,8 @@ ensure_sudo_sss() {
         log "sudo supports SSSD (sudoers: sss will work)"
         return 0
     fi
-    log "sudo lacks SSSD support; reinstalling $(sudo_pkg) from pkg ..."
-    pkg install -y -f "$(sudo_pkg)" || true
+    log "sudo lacks SSSD support; reinstalling from pkg ..."
+    install_pkg_candidates security/sudo-sssd security/sudo || true
     if sudo_supports_sss; then
         log "sudo now supports SSSD"
         return 0
@@ -287,14 +299,22 @@ install_packages() {
     # shellcheck disable=SC2086
     run_or_dry pkg install -y \
         security/sssd2 \
-        "$(sudo_pkg)" \
         net/openldap26-client \
-        security/cyrus-sasl-gssapi \
         security/pam_mkhomedir \
         security/krb5 \
         security/ca_root_nss \
         net/freeipa-client \
         bind-tools
+    # names below vary across repo snapshots (flavors, renames); take the
+    # first candidate that installs, fail clearly when none does.
+    if [ "$ENABLE_SUDO" = "yes" ]; then
+        install_pkg_candidates security/sudo-sssd security/sudo \
+            || die "no sudo package installable (tried sudo-sssd, sudo); check pkg repos"
+    else
+        run_or_dry pkg install -y security/sudo
+    fi
+    install_pkg_candidates security/cyrus-sasl2-gssapi security/cyrus-sasl-gssapi \
+        || die "no SASL GSSAPI package installable; check pkg repos"
     if ! pkg info -x '^sssd' >/dev/null 2>&1 && [ "$DRY_RUN" = "no" ]; then
         die "sssd2 failed to install; check pkg output above"
     fi

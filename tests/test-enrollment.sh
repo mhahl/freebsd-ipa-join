@@ -407,5 +407,39 @@ else
     pass "discovery fails cleanly with no SRV records"
 fi
 
+# --- 15. package fallback when repo lacks a flavor/renamed package ------------
+reset_stubs
+cat > "$FAKEBIN/pkg" <<'EOF'
+#!/bin/sh
+echo "pkg $*" >> "$STUB_LOG"
+case "$*" in *"${PKG_FAIL_MATCH:-__none__}"*) exit 1;; *) exit 0;; esac
+EOF
+chmod +x "$FAKEBIN/pkg"
+export PKG_FAIL_MATCH="sudo-sssd"
+DRY_RUN="no"
+( install_pkg_candidates security/sudo-sssd security/sudo ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "pkg install -y security/sudo-sssd" "$STUB_LOG" \
+    && grep -q "pkg install -y security/sudo$" "$STUB_LOG"; then
+    pass "install tries flavor first, falls back to plain sudo"
+else
+    fail "install tries flavor first, falls back to plain sudo [rc=$rc]"
+fi
+export PKG_FAIL_MATCH="security/sudo"
+( install_pkg_candidates security/sudo-sssd security/sudo ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "install fails clearly when no candidate exists"
+else
+    fail "install fails clearly when no candidate exists"
+fi
+export PKG_FAIL_MATCH="__none__"
+DRY_RUN="yes"
+if install_packages 2>&1 | grep -q "security/cyrus-sasl2-gssapi"; then
+    pass "package install uses the renamed sasl gssapi package"
+else
+    fail "package install uses the renamed sasl gssapi package"
+fi
+DRY_RUN="no"
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

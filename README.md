@@ -64,9 +64,12 @@ Packages installed via `pkg`: `security/sssd2`, `security/sudo-sssd` (the
 SSSD-capable sudo flavor — the installer verifies `sudoers: sss` support
 afterwards and fails with rebuild instructions if it is missing; plain
 `security/sudo` is used when IPA sudo is disabled with `--no-sudo`),
-`net/openldap26-client`, `security/cyrus-sasl-gssapi`,
+`net/openldap26-client`,
+`security/cyrus-sasl2-gssapi` (the old `cyrus-sasl-gssapi` port is gone),
 `security/pam_mkhomedir`, `security/krb5`, `security/ca_root_nss`,
 `net/freeipa-client` (official `ipa` CLI + `ipa-getkeytab`), `bind-tools`.
+Where repo snapshots differ (sudo flavor, sasl rename), the installer tries
+the newest package name first and falls back to older ones automatically.
 
 Files written (originals backed up to `/var/backups/ipa-client`):
 
