@@ -12,8 +12,7 @@
 #  - wires up nsswitch.conf, PAM (system/sshd/sudo), SSH (GSSAPI), sudoers via SSSD
 #  - enables sssd, verifies with getent/id
 #
-# Interactive TUI uses bsddialog(1) (FreeBSD base) or dialog(1) (ports).
-# Falls back to plain stdin prompts when neither is available.
+# Interactive setup uses plain stdin prompts (no dialog/TUI dependency).
 #
 # Usage:
 #   ./freebsd-ipa-client.sh [--uninstall] [--unattended ...] [--help]
@@ -57,8 +56,6 @@ DRY_RUN="no"
 UNATTENDED="no"
 YES="no"
 
-DIALOG=""
-
 # ---------------------------------------------------------------- helpers ---
 
 log() { printf '%s\n' "$*"; }
@@ -71,58 +68,33 @@ need_root() {
     fi
 }
 
-detect_dialog() {
-    if command -v bsddialog >/dev/null 2>&1; then
-        DIALOG="bsddialog"
-    elif command -v dialog >/dev/null 2>&1; then
-        DIALOG="dialog"
-    else
-        DIALOG=""
-    fi
-}
+# All prompts below are plain stdin reads: no bsddialog/dialog dependency,
+# so there is no TUI layer that can swallow input or abort the script.
 
 t_msg() { # $1=text $2=title
-    if [ -n "$DIALOG" ]; then
-        "$DIALOG" --title "${2:-Info}" --msgbox "$1" 14 70
-    else
-        printf '\n=== %s ===\n%s\n' "${2:-Info}" "$1"
-    fi
+    printf '\n=== %s ===\n%s\n' "${2:-Info}" "$1"
 }
 
 t_yesno() { # $1=text $2=title -> 0=yes
-    if [ -n "$DIALOG" ]; then
-        "$DIALOG" --title "${2:-Confirm}" --yesno "$1" 10 70
-    else
-        printf '%s [%s]: %s (y/n) ' "${2:-Confirm}" "$1" ""
-        read -r ans
-        case "$ans" in y|Y|yes|YES|"") return 0 ;; *) return 1 ;; esac
-    fi
+    printf '%s (y/n) [y]: ' "$1" >&2
+    ans=""; read -r ans || return 1
+    case "$ans" in y|Y|yes|YES|"") return 0 ;; *) return 1 ;; esac
 }
 
-t_input() { # $1=prompt $2=default $3=title -> stdout value
-    _p="$1"; _d="$2"; _t="${3:-Input}"
-    if [ -n "$DIALOG" ]; then
-        "$DIALOG" --title "$_t" --stdout --inputbox "$_p" 9 70 "$_d" 2>/dev/null || return 1
-    else
-        printf '%s [%s]: ' "$_p" "$_d" >&2
-        read -r ans
-        [ -z "$ans" ] && ans="$_d"
-        printf '%s' "$ans"
-    fi
+t_input() { # $1=prompt $2=default -> stdout value
+    printf '%s [%s]: ' "$1" "$2" >&2
+    ans=""; read -r ans || return 1
+    [ -z "$ans" ] && ans="$2"
+    printf '%s' "$ans"
 }
 
-t_password() { # $1=prompt $2=title -> stdout value
-    _p="$1"; _t="${2:-Password}"
-    if [ -n "$DIALOG" ]; then
-        "$DIALOG" --title "$_t" --stdout --insecure --passwordbox "$_p" 9 70 2>/dev/null || return 1
-    else
-        printf '%s: ' "$_p" >&2
-        stty -echo 2>/dev/null || true
-        read -r ans
-        stty echo 2>/dev/null || true
-        printf '\n' >&2
-        printf '%s' "$ans"
-    fi
+t_password() { # $1=prompt -> stdout value
+    printf '%s: ' "$1" >&2
+    stty -echo 2>/dev/null || true
+    ans=""; read -r ans || { stty echo 2>/dev/null || true; return 1; }
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
+    printf '%s' "$ans"
 }
 
 upper() { printf '%s' "$1" | tr 'a-z' 'A-Z'; }
@@ -193,21 +165,21 @@ gather_inputs() {
 
     IPA_USER="$(t_input "Privileged IPA user (host management + verify, e.g. admin):" "${IPA_USER:-admin}" "IPA user")" || return 1
 
-    # Enrollment mode menu (curses radiolist when dialog exists)
-    if [ -n "$DIALOG" ]; then
-        mode="$("$DIALOG" --title "Enrollment" --stdout --radiolist \
-            "How will this host join IPA? Auto adds the host server-side and pulls the keytab using the $IPA_USER credentials below." \
-            14 74 4 \
-            auto        "Automatic: host-add + keytab pull (recommended)" on \
-            keytab-file "Manual: copy .keytab file from disk (scp/sneakernet)" off \
-            keytab-url  "Manual: fetch .keytab over http(s) from IPA server" off \
-            otp         "Manual: one-time password (host pre-created with OTP)" off \
-            2>/dev/null)" || return 1
-        ENROLL_MODE="$mode"
-    else
-        printf 'Enrollment [auto/keytab-file/keytab-url/otp] [%s]: ' "$ENROLL_MODE" >&2
-        read -r ans; [ -n "$ans" ] && ENROLL_MODE="$ans"
-    fi
+    # Enrollment mode menu (numbered, plain stdin)
+    printf 'How will this host join IPA?\n' >&2
+    printf '  1) auto (recommended): host-add + keytab pull with %s credentials\n' "$IPA_USER" >&2
+    printf '  2) keytab-file: copy .keytab file from disk (scp/sneakernet)\n' >&2
+    printf '  3) keytab-url: fetch .keytab over http(s) from IPA server\n' >&2
+    printf '  4) otp: one-time host password (host pre-created with OTP)\n' >&2
+    printf 'Choice [1]: ' >&2
+    ans=""; read -r ans || return 1
+    case "${ans:-1}" in
+        1|auto) ENROLL_MODE="auto" ;;
+        2|keytab-file) ENROLL_MODE="keytab-file" ;;
+        3|keytab-url) ENROLL_MODE="keytab-url" ;;
+        4|otp) ENROLL_MODE="otp" ;;
+        *) err "unknown enrollment choice: $ans"; return 1 ;;
+    esac
 
     case "$ENROLL_MODE" in
         auto) ;;
@@ -806,7 +778,6 @@ EOF
 # ------------------------------------------------------------------- main ---
 
 main() {
-    detect_dialog
     # non-interactive flag parsing (all optional; missing -> prompted)
     while [ $# -gt 0 ]; do
         case "$1" in

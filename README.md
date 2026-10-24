@@ -3,8 +3,8 @@
 Enroll a FreeBSD desktop/server in FreeIPA — the equivalent of Linux's
 `ipa-client-install`, which doesn't exist on FreeBSD.
 
-An interactive curses wizard (via `bsddialog`, falling back to `dialog`, then
-plain prompts) installs and configures SSSD + Kerberos + LDAP so **all IPA
+An interactive wizard using plain stdin prompts (no dialog/TUI dependency)
+installs and configures SSSD + Kerberos + LDAP so **all IPA
 users and groups resolve on the system**, with **HBAC access control** and
 **IPA sudo rules** enforced. It was built for a FreeBSD KDE system installed
 via `desktop-installer`, but works on any FreeBSD 13+ host.

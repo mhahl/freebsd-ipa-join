@@ -351,5 +351,33 @@ else
     fail "ensure reinstalls from pkg then fails clearly when still incapable [rc=$rc]"
 fi
 
+# --- 13. plain prompts read from stdin -----------------------------------------
+reset_stubs
+if [ "$(printf 'typed\n' | t_input "P" "def" "T" 2>/dev/null)" = "typed" ]; then
+    pass "t_input returns typed value"
+else
+    fail "t_input returns typed value"
+fi
+if [ "$(printf '\n' | t_input "P" "def" "T" 2>/dev/null)" = "def" ]; then
+    pass "t_input falls back to default on empty input"
+else
+    fail "t_input falls back to default on empty input"
+fi
+if printf 'y\n' | t_yesno "Proceed?" "T" 2>/dev/null; then
+    pass "t_yesno accepts y"
+else
+    fail "t_yesno accepts y"
+fi
+if printf 'n\n' | t_yesno "Proceed?" "T" 2>/dev/null; then
+    fail "t_yesno rejects n"
+else
+    pass "t_yesno rejects n"
+fi
+if [ "$(printf 's3cret\n' | t_password "P" "T" 2>/dev/null)" = "s3cret" ]; then
+    pass "t_password returns typed value"
+else
+    fail "t_password returns typed value"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"
