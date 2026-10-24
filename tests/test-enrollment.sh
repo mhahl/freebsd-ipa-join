@@ -25,6 +25,13 @@ sed -e '$d' "$ROOT/freebsd-ipa-client.sh" > "$TMP/funcs.sh"
 . "$TMP/funcs.sh"
 set +e # allow expected-failure subshells below
 
+# --- ipa tools read config from LOCALBASE, never /etc/ipa -----------------------
+if [ "$IPA_CONF" = "/usr/local/etc/ipa/default.conf" ]; then
+    pass "default ipa conf lives where the FreeBSD tools read it"
+else
+    fail "default ipa conf lives where the FreeBSD tools read it [got '$IPA_CONF']"
+fi
+
 # --- redirect all system paths into $TMP ------------------------------------
 BACKUP_DIR="$TMP/backups"
 HOST_KEYTAB="$TMP/krb5.keytab"
@@ -440,6 +447,33 @@ else
     fail "package install uses the renamed sasl gssapi package"
 fi
 DRY_RUN="no"
+
+# --- 16. sssd module check matches versioned .so names -------------------------
+reset_stubs
+export SSSD_MODDIR="$TMP/mods"
+mkdir -p "$SSSD_MODDIR"
+: > "$SSSD_MODDIR/pam_sss.so"
+: > "$SSSD_MODDIR/nss_sss.so.1"
+DRY_RUN="no"
+if check_sssd_modules 2>&1 | grep -q "warning"; then
+    fail "module check stays quiet when pam/nss modules exist"
+else
+    pass "module check stays quiet when pam/nss modules exist"
+fi
+rm -f "$SSSD_MODDIR"/nss_sss.so*
+if check_sssd_modules 2>&1 | grep -q "nss_sss"; then
+    pass "module check warns on missing nss_sss"
+else
+    fail "module check warns on missing nss_sss"
+fi
+rm -f "$SSSD_MODDIR/pam_sss.so"
+: > "$SSSD_MODDIR/nss_sss.so.1"
+if check_sssd_modules 2>&1 | grep -q "pam_sss"; then
+    pass "module check warns on missing pam_sss"
+else
+    fail "module check warns on missing pam_sss"
+fi
+unset SSSD_MODDIR || true
 
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

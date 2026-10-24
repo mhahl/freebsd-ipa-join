@@ -28,8 +28,9 @@ set -eu
 PROG="$(basename "$0")"
 BACKUP_DIR="/var/backups/ipa-client"
 CA_CRT="/usr/local/etc/ipa/ca.crt"
-IPA_CA_CRT="/etc/ipa/ca.crt"
-IPA_CONF="/etc/ipa/default.conf"
+# NOTE: the FreeBSD port reads ipalib config AND CA from LOCALBASE
+# (/usr/local/etc/ipa/), never from /etc/ipa -- see ipaplatform/freebsd.
+IPA_CONF="/usr/local/etc/ipa/default.conf"
 HOST_KEYTAB="/usr/local/etc/ipa/krb5.keytab"
 SSSD_CONF="/usr/local/etc/sssd/sssd.conf"
 LDAP_CONF="/usr/local/etc/openldap/ldap.conf"
@@ -324,11 +325,19 @@ install_packages() {
         log "warning: auto enrollment needs 'pkg install net/freeipa-client'."
         log "warning: continuing; fall back to a manual mode if auto fails."
     fi
-    for m in pam_sss nss_sss; do
-        if [ ! -e "/usr/local/lib/${m}.so" ] && [ "$DRY_RUN" = "no" ]; then
-            log "warning: /usr/local/lib/${m}.so missing (sssd port without IPA support?)"
-        fi
-    done
+    check_sssd_modules
+}
+
+check_sssd_modules() {
+    # warn about missing SSSD NSS/PAM modules; the NSS module carries a
+    # version suffix (nss_sss.so.1), so match it with a glob.
+    _moddir="${SSSD_MODDIR:-/usr/local/lib}"
+    if [ ! -e "$_moddir/pam_sss.so" ] && [ "$DRY_RUN" = "no" ]; then
+        log "warning: $_moddir/pam_sss.so missing (sssd port without PAM support?)"
+    fi
+    if ! ls "$_moddir"/nss_sss.so* >/dev/null 2>&1 && [ "$DRY_RUN" = "no" ]; then
+        log "warning: nss_sss module missing from $_moddir (sssd port without NSS support?)"
+    fi
 }
 
 sync_time() {
@@ -415,7 +424,7 @@ fetch_ca() {
     run_or_dry mkdir -p "$(dirname "$CA_CRT")"
     url="https://$IPA_SERVER/ipa/config/ca.crt"
     if [ "$DRY_RUN" = "yes" ]; then
-        log "[dry-run] fetch -o $CA_CRT $url && cp $CA_CRT $IPA_CA_CRT"
+        log "[dry-run] fetch -o $CA_CRT $url"
         return 0
     fi
     backup_file "$CA_CRT" || true
@@ -430,11 +439,7 @@ fetch_ca() {
     # sanity: must be PEM
     head -1 "$CA_CRT" | grep -q "BEGIN CERTIFICATE" \
         || die "fetched CA is not a PEM certificate; check $CA_CRT"
-    log "CA stored at $CA_CRT"
-    # the official client tools (ipa CLI) verify TLS against /etc/ipa/ca.crt
-    mkdir -p "$(dirname "$IPA_CA_CRT")"
-    cp -p "$CA_CRT" "$IPA_CA_CRT"
-    chmod 644 "$IPA_CA_CRT"
+    log "CA stored at $CA_CRT (also where the ipa tools verify TLS)"
 }
 
 _auto_cleanup() { # $1=ccache file $2=previous KRB5CCNAME value (may be empty)
@@ -584,7 +589,9 @@ EOF
 
 write_ipa_conf() {
     # Minimal client config so the official tools (ipa CLI) know which
-    # server/realm to talk to before this host is enrolled.
+    # server/realm to talk to before this host is enrolled. Must live at
+    # /usr/local/etc/ipa/default.conf: that is the path the FreeBSD port
+    # actually reads (ipaplatform/freebsd), /etc/ipa is never consulted.
     log "== writing $IPA_CONF =="
     [ "$DRY_RUN" = "yes" ] && { log "[dry-run] write $IPA_CONF"; return 0; }
     backup_file "$IPA_CONF"

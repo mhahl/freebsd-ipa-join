@@ -75,11 +75,11 @@ Files written (originals backed up to `/var/backups/ipa-client`):
 
 - system hostname set to the enrolled FQDN, plus an `/etc/hosts` entry for it (`--ip` overrides the default-route auto-detection)
 - `/etc/krb5.conf` — realm, KDC, host keytab location
-- `/usr/local/etc/ipa/ca.crt` + `/etc/ipa/ca.crt` — IPA CA certificate
+- `/usr/local/etc/ipa/ca.crt` — IPA CA certificate (also where the `ipa` tools verify TLS)
 - `/usr/local/etc/ipa/krb5.keytab` (0600) — host keytab
 - `/usr/local/etc/openldap/ldap.conf` — GSSAPI + StartTLS against the IPA server
 - `/usr/local/etc/sssd/sssd.conf` (0600) — `id/auth/access/chpass/sudo_provider = ipa`
-- `/etc/ipa/default.conf` — server/realm pointers for the `ipa` CLI
+- `/usr/local/etc/ipa/default.conf` — server/realm pointers for the `ipa` CLI (this exact path matters: the FreeBSD port reads ipalib config from LOCALBASE, never `/etc/ipa`)
 - `/etc/nsswitch.conf` — `passwd`/`group`/`sudoers: files sss` (local users still win)
 - `/etc/pam.d/system`, `/etc/pam.d/sshd` (and `sudo`) — `pam_sss` + `pam_mkhomedir` added compatibly, so KDE/`sddm` logins keep working
 - `/etc/ssh/sshd_config`, `/etc/ssh/ssh_config` — GSSAPI enabled
