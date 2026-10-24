@@ -39,6 +39,10 @@ sudo sh freebsd-ipa-client.sh --unattended \
   --hostname client.example.com --user admin --password '...'
 ```
 
+`--unattended` never prompts: it fails fast if a required input is missing
+and skips the final confirmation (that part is also available alone as
+`--yes`). Without a terminal it also requires `--password` up front.
+
 ## Enrollment modes
 
 | Mode | Flag | How the host keytab is obtained |
@@ -52,7 +56,10 @@ Get the full option list with `sh freebsd-ipa-client.sh --help`.
 
 ## What the script changes
 
-Packages installed via `pkg`: `security/sssd`, `security/sudo`,
+Packages installed via `pkg`: `security/sssd2`, `security/sudo-sssd` (the
+SSSD-capable sudo flavor — the installer verifies `sudoers: sss` support
+afterwards and fails with rebuild instructions if it is missing; plain
+`security/sudo` is used when IPA sudo is disabled with `--no-sudo`),
 `net/openldap26-client`, `security/cyrus-sasl-gssapi`,
 `security/pam_mkhomedir`, `security/krb5`, `security/ca_root_nss`,
 `net/freeipa-client` (official `ipa` CLI + `ipa-getkeytab`), `bind-tools`.

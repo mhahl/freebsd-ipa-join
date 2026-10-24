@@ -205,5 +205,151 @@ else
     fail "detect_ip uses default-route interface IPv4 [got '$(detect_ip)']"
 fi
 
+# --- 9. required-input check for unattended mode ------------------------------
+reset_stubs
+IPA_SERVER=""; IPA_DOMAIN="example.com"; CLIENT_FQDN="client.example.com"; ENROLL_MODE="auto"
+if have_required_inputs; then
+    fail "required-input check fails when server missing"
+else
+    pass "required-input check fails when server missing"
+fi
+IPA_SERVER="idm.example.com"
+if have_required_inputs; then
+    pass "required-input check passes when complete"
+else
+    fail "required-input check passes when complete"
+fi
+ENROLL_MODE="otp"; OTP=""
+if have_required_inputs; then
+    fail "required-input check fails for otp without OTP"
+else
+    pass "required-input check fails for otp without OTP"
+fi
+OTP="secret-otp"
+if have_required_inputs; then
+    pass "required-input check passes for otp with OTP"
+else
+    fail "required-input check passes for otp with OTP"
+fi
+ENROLL_MODE="auto"; OTP=""; IPA_SERVER="idm.example.com"
+
+# --- 10. time sync enables ntpd and starts it when stopped --------------------
+reset_stubs
+cat > "$FAKEBIN/sysrc" <<'EOF'
+#!/bin/sh
+echo "sysrc $*" >> "$STUB_LOG"
+exit 0
+EOF
+cat > "$FAKEBIN/service" <<'EOF'
+#!/bin/sh
+echo "service $*" >> "$STUB_LOG"
+if [ "$2" = "status" ]; then exit "${SERVICE_STATUS_EXIT:-0}"; fi
+exit 0
+EOF
+cat > "$FAKEBIN/ntpdate" <<'EOF'
+#!/bin/sh
+echo "ntpdate $*" >> "$STUB_LOG"
+exit 0
+EOF
+cat > "$FAKEBIN/pkg" <<'EOF'
+#!/bin/sh
+echo "pkg $*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$FAKEBIN/sysrc" "$FAKEBIN/service" "$FAKEBIN/ntpdate" "$FAKEBIN/pkg"
+export SERVICE_STATUS_EXIT=1
+DRY_RUN="no"
+sync_time
+if grep -q "sysrc ntpd_enable=YES" "$STUB_LOG" \
+    && grep -q "service ntpd start" "$STUB_LOG"; then
+    pass "sync_time enables ntpd and starts it when stopped"
+else
+    fail "sync_time enables ntpd and starts it when stopped"
+fi
+rm -f "$STUB_LOG"
+export SERVICE_STATUS_EXIT=0
+sync_time
+if grep -q "service ntpd start" "$STUB_LOG"; then
+    fail "sync_time leaves a running ntpd alone"
+else
+    pass "sync_time leaves a running ntpd alone"
+fi
+
+# --- 11. sudo SSSD support detection -------------------------------------------
+reset_stubs
+cat > "$FAKEBIN/sudo" <<'EOF'
+#!/bin/sh
+echo "sudo $*" >> "$STUB_LOG"
+if [ "$1" = "-V" ]; then cat "$SUDO_V_FILE"; fi
+exit 0
+EOF
+cat > "$FAKEBIN/ldd" <<'EOF'
+#!/bin/sh
+echo "ldd $*" >> "$STUB_LOG"
+cat "$LDD_FILE"
+exit 0
+EOF
+chmod +x "$FAKEBIN/sudo" "$FAKEBIN/ldd"
+export SUDO_V_FILE="$TMP/sudo-v.txt" LDD_FILE="$TMP/ldd.txt"
+printf 'Sudo version 1.9.17p2\nSudoers path: /usr/local/etc/sudoers\nPlugins: sudoers_policy sudoers_audit sudoers_io sssd\n' > "$SUDO_V_FILE"
+printf '\tlibthr.so.3 => /lib/libthr.so.3\n' > "$LDD_FILE"
+if sudo_supports_sss; then
+    pass "sudo detection passes when sudo -V names sss"
+else
+    fail "sudo detection passes when sudo -V names sss"
+fi
+printf 'Sudo version 1.9.17p2\nSudoers path: /usr/local/etc/sudoers\n' > "$SUDO_V_FILE"
+printf '\tlibsss_nss_idmap.so.0 => /usr/local/lib/libsss_nss_idmap.so.0\n' > "$LDD_FILE"
+if sudo_supports_sss; then
+    pass "sudo detection passes when linked against libsss"
+else
+    fail "sudo detection passes when linked against libsss"
+fi
+printf '\tlibthr.so.3 => /lib/libthr.so.3\n' > "$LDD_FILE"
+if sudo_supports_sss; then
+    fail "sudo detection fails without any sss trace"
+else
+    pass "sudo detection fails without any sss trace"
+fi
+
+# --- 12. sudo package selection + ensure ---------------------------------------
+reset_stubs
+ENABLE_SUDO="yes"
+if [ "$(sudo_pkg)" = "security/sudo-sssd" ]; then
+    pass "sudo package is the sssd flavor when IPA sudo enabled"
+else
+    fail "sudo package is the sssd flavor when IPA sudo enabled"
+fi
+ENABLE_SUDO="no"
+if [ "$(sudo_pkg)" = "security/sudo" ]; then
+    pass "sudo package is plain sudo when IPA sudo disabled"
+else
+    fail "sudo package is plain sudo when IPA sudo disabled"
+fi
+ENABLE_SUDO="yes"
+DRY_RUN="yes"
+if install_packages 2>&1 | grep -q "security/sudo-sssd"; then
+    pass "package install pulls the sssd sudo flavor"
+else
+    fail "package install pulls the sssd sudo flavor"
+fi
+DRY_RUN="no"
+printf 'sss\n' > "$SUDO_V_FILE"
+rm -f "$STUB_LOG"
+( ensure_sudo_sss ); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q "^pkg " "$STUB_LOG" 2>/dev/null; then
+    pass "ensure keeps a capable sudo without reinstall"
+else
+    fail "ensure keeps a capable sudo without reinstall [rc=$rc]"
+fi
+printf 'plain\n' > "$SUDO_V_FILE"
+rm -f "$STUB_LOG"
+( ensure_sudo_sss ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "pkg install.*security/sudo-sssd" "$STUB_LOG"; then
+    pass "ensure reinstalls from pkg then fails clearly when still incapable"
+else
+    fail "ensure reinstalls from pkg then fails clearly when still incapable [rc=$rc]"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

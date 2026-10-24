@@ -2,7 +2,7 @@
 # freebsd-ipa-client.sh - FreeIPA client enrollment for FreeBSD
 #
 # Mimics Linux `ipa-client-install` for FreeBSD using SSSD + Kerberos + LDAP:
-#  - installs packages (sssd, sudo with SSSD support, SASL/GSSAPI, LDAP,
+#  - installs packages (sssd2, sudo-sssd flavor, SASL/GSSAPI, LDAP,
 #    mkhomedir, and the official net/freeipa-client tools)
 #  - fetches IPA CA certificate
 #  - enrolls automatically: adds the host server-side (ipa host-add) and pulls
@@ -54,6 +54,8 @@ ENABLE_SUDO="yes"
 ENABLE_HBAC="yes"
 ENUMERATE="no"
 DRY_RUN="no"
+UNATTENDED="no"
+YES="no"
 
 DIALOG=""
 
@@ -165,6 +167,13 @@ prechecks() {
     fi
 }
 
+have_required_inputs() {
+    # 0 when every mandatory input is present (server, domain, hostname,
+    # plus OTP for otp mode); used to decide between prompting and failing.
+    [ -n "$IPA_SERVER" ] && [ -n "$IPA_DOMAIN" ] && [ -n "$CLIENT_FQDN" ] \
+        && { [ "$ENROLL_MODE" != "otp" ] || [ -n "$OTP" ]; }
+}
+
 gather_inputs() {
     def_fqdn="$(hostname 2>/dev/null || echo client.example.com)"
     case "$def_fqdn" in *.*) ;; *) def_fqdn="$def_fqdn.example.com" ;; esac
@@ -245,17 +254,62 @@ KDE/sddm logins keep working (patched via system PAM)."
     t_yesno "$sum" "Confirm"
 }
 
+sudo_pkg() {
+    # sudo flavor for the current config: only the sssd flavor can read
+    # sudoers rules from SSSD (plain security/sudo cannot).
+    if [ "$ENABLE_SUDO" = "yes" ]; then
+        printf 'security/sudo-sssd'
+    else
+        printf 'security/sudo'
+    fi
+}
+
+sudo_supports_sss() {
+    # true when the installed sudo can read sudoers from SSSD.
+    if command -v sudo >/dev/null 2>&1 \
+        && sudo -V 2>/dev/null | grep -qiE 'sss'; then
+        return 0
+    fi
+    if command -v ldd >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 \
+        && ldd "$(command -v sudo)" 2>/dev/null | grep -qi 'sss'; then
+        return 0
+    fi
+    return 1
+}
+
+ensure_sudo_sss() {
+    # sudoers: sss only works with SSSD-capable sudo; (re)install from pkg,
+    # otherwise fail with rebuild instructions instead of silent sudo denial.
+    log "== checking sudo SSSD support =="
+    if [ "$DRY_RUN" = "yes" ]; then
+        log "[dry-run] verify sudo supports sudoers: sss"
+        return 0
+    fi
+    if sudo_supports_sss; then
+        log "sudo supports SSSD (sudoers: sss will work)"
+        return 0
+    fi
+    log "sudo lacks SSSD support; reinstalling $(sudo_pkg) from pkg ..."
+    pkg install -y -f "$(sudo_pkg)" || true
+    if sudo_supports_sss; then
+        log "sudo now supports SSSD"
+        return 0
+    fi
+    die "sudo still lacks SSSD support. Rebuild the sssd flavor via ports:
+  # cd /usr/ports/security/sudo && make config   # FLAVOR=sssd
+  # make build deinstall install clean"
+}
+
 install_packages() {
     log "== installing packages =="
-    # sssd pulls samba/ldb for the IPA provider; sudo must have SSSD support
-    # for sudoers: sss. Modern quarterly/latest packages already do, but the
-    # ports knobs (security/sudo: SSSD on, PAM off, GSSAPI_MIT) still apply
-    # if a site rebuilds via ports/poudriere.
+    # sssd2 carries the IPA provider (sssd-1.x is gone from ports);
+    # sudo comes in default/sssd flavors, and only the sssd flavor reads
+    # sudoers from SSSD (verified after install by ensure_sudo_sss).
     run_or_dry pkg update
     # shellcheck disable=SC2086
     run_or_dry pkg install -y \
-        security/sssd \
-        security/sudo \
+        security/sssd2 \
+        "$(sudo_pkg)" \
         net/openldap26-client \
         security/cyrus-sasl-gssapi \
         security/pam_mkhomedir \
@@ -263,8 +317,8 @@ install_packages() {
         security/ca_root_nss \
         net/freeipa-client \
         bind-tools
-    if ! pkg info -x '^sssd$' >/dev/null 2>&1 && [ "$DRY_RUN" = "no" ]; then
-        die "sssd failed to install; check pkg output above"
+    if ! pkg info -x '^sssd' >/dev/null 2>&1 && [ "$DRY_RUN" = "no" ]; then
+        die "sssd2 failed to install; check pkg output above"
     fi
     # net/freeipa-client provides ipa + ipa-getkeytab for auto enrollment
     if ! have_cmd ipa-getkeytab && [ "$DRY_RUN" = "no" ]; then
@@ -281,11 +335,16 @@ install_packages() {
 
 sync_time() {
     log "== time sync (Kerberos needs <5min skew) =="
-    if have_cmd service && service ntpd status >/dev/null 2>&1; then
+    # enable first: asking status of a disabled service is unreliable.
+    run_or_dry sysrc ntpd_enable=YES
+    if [ "$DRY_RUN" = "yes" ]; then
+        log "[dry-run] service ntpd start (if not already running)"
+        return 0
+    fi
+    if service ntpd status >/dev/null 2>&1; then
         log "ntpd already running"
     else
-        run_or_dry sysrc ntpd_enable=YES
-        run_or_dry service ntpd start || run_or_dry ntpdate -b "$IPA_SERVER" || true
+        service ntpd start || ntpdate -b "$IPA_SERVER" || true
     fi
 }
 
@@ -646,7 +705,6 @@ configure_pam_ssh() {
 enable_services() {
     log "== enabling services =="
     run_or_dry sysrc sssd_enable=YES
-    run_or_dry sysrc ssd_enable=NO 2>/dev/null || true
     if [ "$DRY_RUN" = "no" ]; then
         rm -rf /var/db/sss/db/* 2>/dev/null || true
         service sssd restart || service sssd start
@@ -738,6 +796,8 @@ Options:
   --permit             disable HBAC enforcement (access=permit, debug only)
   --enumerate          set enumerate=True (lists ALL users in getent; slow)
   --dry-run            print actions without changing the system
+  --unattended         never prompt: fail if required inputs are missing
+  --yes                skip the final confirmation
   --uninstall          restore backups and disable sssd
   --help               this text
 EOF
@@ -767,7 +827,8 @@ main() {
             --enumerate) ENUMERATE="True"; shift ;;
             --dry-run) DRY_RUN="yes"; shift ;;
             --uninstall) do_uninstall; exit 0 ;;
-            --unattended) shift ;; # just a marker; flags must still be given
+            --yes) YES="yes"; shift ;;
+            --unattended) UNATTENDED="yes"; YES="yes"; shift ;;
             -h|--help) usage; exit 0 ;;
             *) die "unknown option: $1 (see --help)" ;;
         esac
@@ -777,19 +838,31 @@ main() {
     t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nKDE/sddm already installed: untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
 
     # prompt for anything still missing (interactive or fail in unattended)
-    if [ -z "$IPA_SERVER" ] || [ -z "$IPA_DOMAIN" ] || \
-       [ -z "$CLIENT_FQDN" ] || { [ "$ENROLL_MODE" = "otp" ] && [ -z "$OTP" ]; }; then
+    if ! have_required_inputs; then
+        if [ "$UNATTENDED" = "yes" ]; then
+            die "unattended mode needs --server, --domain and --hostname (plus --otp for otp mode)"
+        fi
         gather_inputs || exit 1
     else
         [ -z "$IPA_REALM" ] && IPA_REALM="$(upper "$IPA_DOMAIN")"
         if [ -z "$IPA_PASSWORD" ] && [ "$DRY_RUN" = "no" ]; then
+            if [ "$UNATTENDED" = "yes" ] && [ ! -t 0 ]; then
+                die "unattended mode needs --password (no terminal to prompt on)"
+            fi
             IPA_PASSWORD="$(t_password "Password for $IPA_USER (enrollment + verify; never stored):" "IPA password")" || exit 1
         fi
     fi
 
-    confirm_summary || { log "cancelled."; exit 0; }
+    if [ "$YES" = "no" ]; then
+        confirm_summary || { log "cancelled."; exit 0; }
+    else
+        log "proceeding without confirmation (--yes)"
+    fi
 
     install_packages
+    if [ "$ENABLE_SUDO" = "yes" ]; then
+        ensure_sudo_sss
+    fi
     sync_time
     configure_hostname_hosts
     fetch_ca
