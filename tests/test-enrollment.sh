@@ -493,5 +493,33 @@ else
     fail "short hostname qualifies with plain domain"
 fi
 
+# --- 18. pam_sss allows the OTP second factor -------------------------------
+reset_stubs
+ENABLE_MKHOMEDIR="yes"
+printf 'auth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\naccount\t\trequired\tpam_unix.so\npassword\trequired\tpam_unix.so\t\tno_warn try_first_pass\nsession\t\trequired\tpam_lastlog.so\t\tno_fail\n' > "$TMP/system.pam"
+patch_pam_file "$TMP/system.pam"
+if grep -q "pam_sss.so.*forward_pass" "$TMP/system.pam" \
+    && ! grep -q "pam_sss.so.*use_first_pass" "$TMP/system.pam"; then
+    pass "fresh PAM patch uses forward_pass (2FA-capable)"
+else
+    fail "fresh PAM patch uses forward_pass (2FA-capable)"
+fi
+patch_pam_file "$TMP/system.pam"
+if [ "$(grep -c "pam_sss.so" "$TMP/system.pam")" -eq 3 ] \
+    && grep -q "pam_mkhomedir" "$TMP/system.pam"; then
+    pass "PAM re-patch is idempotent, keeps mkhomedir"
+else
+    fail "PAM re-patch is idempotent, keeps mkhomedir"
+fi
+printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\nauth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\n' > "$TMP/old.pam"
+patch_pam_file "$TMP/old.pam"
+if grep -q "pam_sss.so.*forward_pass" "$TMP/old.pam" \
+    && ! grep -q "pam_sss.so.*use_first_pass" "$TMP/old.pam" \
+    && [ "$(grep -c "pam_sss.so" "$TMP/old.pam")" -eq 1 ]; then
+    pass "older use_first_pass installs upgrade to forward_pass"
+else
+    fail "older use_first_pass installs upgrade to forward_pass"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

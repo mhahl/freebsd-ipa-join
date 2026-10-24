@@ -209,7 +209,7 @@ gather_inputs() {
         *) die "unknown enrollment mode: $ENROLL_MODE" ;;
     esac
 
-    IPA_PASSWORD="$(t_password "Password for $IPA_USER (IPA enrollment + kinit; never stored):" "IPA password")" || return 1
+    IPA_PASSWORD="$(t_password "Password for $IPA_USER (2FA admins: append OTP, single line; never stored):" "IPA password")" || return 1
 
     t_yesno "Create home dirs on first login (pam_mkhomedir)?" "Homedirs" \
         && ENABLE_MKHOMEDIR="yes" || ENABLE_MKHOMEDIR="no"
@@ -479,7 +479,7 @@ enroll_auto() {
     printf '%s' "$IPA_PASSWORD" | kinit "$IPA_USER@$IPA_REALM" >/dev/null 2>&1 || _rc=$?
     if [ "$_rc" -ne 0 ]; then
         _auto_cleanup "$_cc" "$_old_cc"
-        die "kinit as $IPA_USER@$IPA_REALM failed (wrong password? KDC at $IPA_SERVER reachable? clock in sync?)"
+        die "kinit as $IPA_USER@$IPA_REALM failed (wrong password? 2FA admins append the OTP to the password, single line. KDC at $IPA_SERVER reachable? clock in sync?)"
     fi
     log "authenticated to IPA as $IPA_USER"
     if REQUESTS_CA_BUNDLE="$CA_CRT" ipa host-show "$CLIENT_FQDN" </dev/null >/dev/null 2>&1; then
@@ -694,22 +694,31 @@ patch_pam_file() { # $1=pam file
     f="$1"
     [ -f "$f" ] || { log "skip missing $f"; return 0; }
     backup_file "$f"
-    # Skip if already patched
-    grep -q "pam_sss.so" "$f" && { log "$f already has pam_sss"; return 0; }
-    tmp="$(mktemp)"
-    awk '
-      /^auth.*pam_unix\.so/ && !a_done { print "auth\t\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass"; a_done=1 }
-      /^account.*pam_unix\.so/ && !c_done { print "account\t\trequired\t/usr/local/lib/pam_sss.so\t\tignore_unknown_user ignore_authinfo_unavail"; c_done=1 }
-      /^password.*pam_unix\.so/ && !p_done { print "password\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_authtok"; p_done=1 }
-      { print }
-    ' "$f" > "$tmp"
-    # session mkhomedir appended once
-    if [ "$ENABLE_MKHOMEDIR" = "yes" ] && ! grep -q "pam_mkhomedir" "$tmp"; then
-        printf 'session\t\trequired\t/usr/local/lib/pam_mkhomedir.so\t\tmode=0700\n' >> "$tmp"
+    if grep -q "pam_sss.so" "$f"; then
+        # normalize older installs: use_first_pass never prompts, which
+        # blocks the OTP second factor; forward_pass allows it.
+        if grep -q "pam_sss\.so.*use_first_pass" "$f"; then
+            sed -i '' -E "s|pam_sss\.so(.*)use_first_pass|pam_sss.so\1forward_pass|g" "$f"
+            log "$f upgraded pam_sss to forward_pass (2FA)"
+        else
+            log "$f already has pam_sss"
+        fi
+    else
+        tmp="$(mktemp)"
+        awk '
+          /^auth.*pam_unix\.so/ && !a_done { print "auth\t\tsufficient\t/usr/local/lib/pam_sss.so\t\tforward_pass"; a_done=1 }
+          /^account.*pam_unix\.so/ && !c_done { print "account\t\trequired\t/usr/local/lib/pam_sss.so\t\tignore_unknown_user ignore_authinfo_unavail"; c_done=1 }
+          /^password.*pam_unix\.so/ && !p_done { print "password\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_authtok"; p_done=1 }
+          { print }
+        ' "$f" > "$tmp"
+        cat "$tmp" > "$f"
+        rm -f "$tmp"
+        log "patched $f"
     fi
-    cat "$tmp" > "$f"
-    rm -f "$tmp"
-    log "patched $f"
+    # session mkhomedir appended once (runs on every path)
+    if [ "$ENABLE_MKHOMEDIR" = "yes" ] && ! grep -q "pam_mkhomedir" "$f"; then
+        printf 'session\t\trequired\t/usr/local/lib/pam_mkhomedir.so\t\tmode=0700\n' >> "$f"
+    fi
 }
 
 configure_pam_ssh() {
@@ -888,7 +897,7 @@ main() {
             if [ "$UNATTENDED" = "yes" ] && [ ! -t 0 ]; then
                 die "unattended mode needs --password (no terminal to prompt on)"
             fi
-            IPA_PASSWORD="$(t_password "Password for $IPA_USER (enrollment + verify; never stored):" "IPA password")" || exit 1
+            IPA_PASSWORD="$(t_password "Password for $IPA_USER (2FA admins: append OTP, single line; never stored):" "IPA password")" || exit 1
         fi
     fi
 

@@ -110,5 +110,6 @@ sh tests/test-enrollment.sh
 
 ## Notes
 
+- 2FA/OTP logins work: PAM uses `forward_pass` so the second-factor prompt appears. 2FA admins enter password+OTP in the single password prompt.
 - Re-enrolling an existing host rotates its keytab and invalidates old copies.
 - Bare `getent passwd` lists local users only unless `enumerate = True` (`--enumerate`, slower on large directories).
