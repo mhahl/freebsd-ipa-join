@@ -99,6 +99,16 @@ t_password() { # $1=prompt -> stdout value
 }
 
 upper() { printf '%s' "$1" | tr 'a-z' 'A-Z'; }
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+default_fqdn() { # $1=raw hostname $2=domain -> qualified FQDN
+    # short names qualify with the (lowercased) IPA domain instead of a
+    # hardcoded suffix; already-qualified names pass through untouched.
+    case "$1" in
+        *.*) printf '%s' "$1" ;;
+        *)   [ -n "${2:-}" ] && printf '%s.%s' "$1" "$(lower "$2")" || printf '%s' "$1" ;;
+    esac
+}
 
 backup_file() { # $1=file
     [ -e "$1" ] || return 0
@@ -148,8 +158,7 @@ have_required_inputs() {
 }
 
 gather_inputs() {
-    def_fqdn="$(hostname 2>/dev/null || echo client.example.com)"
-    case "$def_fqdn" in *.*) ;; *) def_fqdn="$def_fqdn.example.com" ;; esac
+    _raw_host="$(hostname 2>/dev/null || echo client)"
 
     IPA_DOMAIN="$(t_input "IPA domain (DNS domain, e.g. example.com):" "${IPA_DOMAIN:-}" "IPA domain")" || return 1
     [ -n "$IPA_DOMAIN" ] || { err "IPA domain is required"; return 1; }
@@ -166,6 +175,7 @@ gather_inputs() {
     IPA_REALM="$(t_input "Kerberos realm (usually UPPER of domain):" "$(upper "$IPA_DOMAIN")" "Realm")" || return 1
     [ -n "$IPA_REALM" ] || IPA_REALM="$(upper "$IPA_DOMAIN")"
 
+    def_fqdn="$(default_fqdn "$_raw_host" "$IPA_DOMAIN")"
     CLIENT_FQDN="$(t_input "This client's FQDN (auto mode adds it to IPA):" "$def_fqdn" "Hostname")" || return 1
 
     HOST_IP="$(t_input "This host's IP for /etc/hosts (blank to auto-detect):" "$(detect_ip)" "Host IP")" || return 1

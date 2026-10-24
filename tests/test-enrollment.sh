@@ -475,5 +475,23 @@ else
 fi
 unset SSSD_MODDIR || true
 
+# --- 17. hostname default derives from the realm domain -------------------------
+reset_stubs
+if [ "$(default_fqdn "laptop" "LHM.SIGAINT.AU")" = "laptop.lhm.sigaint.au" ]; then
+    pass "short hostname qualifies with lowercased domain"
+else
+    fail "short hostname qualifies with lowercased domain [got '$(default_fqdn "laptop" "LHM.SIGAINT.AU")']"
+fi
+if [ "$(default_fqdn "client.example.com" "OTHER.ORG")" = "client.example.com" ]; then
+    pass "already-qualified hostname is left untouched"
+else
+    fail "already-qualified hostname is left untouched"
+fi
+if [ "$(default_fqdn "client" "example.com")" = "client.example.com" ]; then
+    pass "short hostname qualifies with plain domain"
+else
+    fail "short hostname qualifies with plain domain"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"
