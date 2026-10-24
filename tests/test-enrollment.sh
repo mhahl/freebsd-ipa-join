@@ -379,5 +379,33 @@ else
     fail "t_password returns typed value"
 fi
 
+# --- 14. DNS SRV discovery picks lowest-priority LDAP server ------------------
+reset_stubs
+cat > "$FAKEBIN/drill" <<'EOF'
+#!/bin/sh
+echo "drill $*" >> "$STUB_LOG"
+cat "$DRILL_FILE"
+exit 0
+EOF
+chmod +x "$FAKEBIN/drill"
+export DRILL_FILE="$TMP/drill.txt"
+printf '_ldap._tcp.example.com.\t3600\tIN\tSRV\t10 100 389 idm2.example.com.\n_ldap._tcp.example.com.\t3600\tIN\tSRV\t0 100 389 idm.example.com.\n;; ADDITIONAL SECTION:\nidm.example.com.\t3600\tIN\tA\t10.0.0.40\n' > "$DRILL_FILE"
+if [ "$(discover_ipa_server "example.com")" = "idm.example.com" ]; then
+    pass "discovery picks lowest-priority SRV target without trailing dot"
+else
+    fail "discovery picks lowest-priority SRV target without trailing dot [got '$(discover_ipa_server "example.com")']"
+fi
+if grep -q "drill SRV _ldap._tcp.example.com" "$STUB_LOG"; then
+    pass "discovery queries _ldap._tcp SRV records"
+else
+    fail "discovery queries _ldap._tcp SRV records"
+fi
+: > "$DRILL_FILE"
+if discover_ipa_server "example.com" 2>/dev/null; then
+    fail "discovery fails cleanly with no SRV records"
+else
+    pass "discovery fails cleanly with no SRV records"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

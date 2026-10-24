@@ -150,11 +150,17 @@ gather_inputs() {
     def_fqdn="$(hostname 2>/dev/null || echo client.example.com)"
     case "$def_fqdn" in *.*) ;; *) def_fqdn="$def_fqdn.example.com" ;; esac
 
-    IPA_SERVER="$(t_input "FreeIPA server FQDN or IP (e.g. idm.example.com):" "${IPA_SERVER:-}" "IPA server")" || return 1
-    [ -n "$IPA_SERVER" ] || { err "IPA server is required"; return 1; }
-
     IPA_DOMAIN="$(t_input "IPA domain (DNS domain, e.g. example.com):" "${IPA_DOMAIN:-}" "IPA domain")" || return 1
     [ -n "$IPA_DOMAIN" ] || { err "IPA domain is required"; return 1; }
+
+    if [ -z "$IPA_SERVER" ]; then
+        IPA_SERVER="$(discover_ipa_server "$IPA_DOMAIN")" || true
+        if [ -n "$IPA_SERVER" ]; then
+            log "discovered IPA server $IPA_SERVER via DNS SRV (_ldap._tcp.$IPA_DOMAIN)"
+        fi
+    fi
+    IPA_SERVER="$(t_input "FreeIPA server FQDN or IP:" "${IPA_SERVER:-}" "IPA server")" || return 1
+    [ -n "$IPA_SERVER" ] || { err "IPA server is required"; return 1; }
 
     IPA_REALM="$(t_input "Kerberos realm (usually UPPER of domain):" "$(upper "$IPA_DOMAIN")" "Realm")" || return 1
     [ -n "$IPA_REALM" ] || IPA_REALM="$(upper "$IPA_DOMAIN")"
@@ -326,6 +332,23 @@ detect_ip() {
     if [ -n "$_gw_if" ]; then
         ifconfig "$_gw_if" 2>/dev/null | awk '/^[[:space:]]*inet /{print $2; exit}'
     fi
+}
+
+discover_ipa_server() { # $1=domain -> stdout IPA server hostname
+    # FreeIPA publishes _ldap._tcp.<domain> SRV records; use the lowest
+    # priority target (first listed wins ties). Quiet; fails when none found.
+    _srv=""
+    if command -v drill >/dev/null 2>&1; then
+        _srv="$(drill SRV "_ldap._tcp.$1" 2>/dev/null | awk '$4 == "SRV" {print $5, $7, $8}')"
+    elif command -v dig >/dev/null 2>&1; then
+        _srv="$(dig +short SRV "_ldap._tcp.$1" 2>/dev/null | awk '{print $1, $3, $4}')"
+    else
+        return 1
+    fi
+    [ -n "$_srv" ] || return 1
+    _best="$(printf '%s\n' "$_srv" | awk 'NF == 3' | sort -n | head -1 | awk '{print $3}' | sed 's/\.$//')"
+    [ -n "$_best" ] || return 1
+    printf '%s' "$_best"
 }
 
 update_hosts_file() { # $1=hosts file $2=ip $3=fqdn $4=short name; idempotent
@@ -752,7 +775,7 @@ Unattended (auto mode needs only server/domain/hostname/user/password):
     --hostname client.example.com --user admin --password '...'
 
 Options:
-  --server FQDN        IPA server
+  --server FQDN        IPA server (default: DNS SRV discovery)
   --domain DOMAIN      IPA DNS domain
   --realm REALM        Kerberos realm (default: upper(domain))
   --hostname FQDN      this client's FQDN
@@ -807,6 +830,14 @@ main() {
 
     prechecks
     t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nKDE/sddm already installed: untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
+
+    # unattended discovery: --domain alone suffices when DNS SRV exists
+    if [ "$UNATTENDED" = "yes" ] && [ -z "$IPA_SERVER" ] && [ -n "$IPA_DOMAIN" ]; then
+        IPA_SERVER="$(discover_ipa_server "$IPA_DOMAIN")" || true
+        if [ -n "$IPA_SERVER" ]; then
+            log "discovered IPA server $IPA_SERVER via DNS SRV (_ldap._tcp.$IPA_DOMAIN)"
+        fi
+    fi
 
     # prompt for anything still missing (interactive or fail in unattended)
     if ! have_required_inputs; then

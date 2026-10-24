@@ -43,6 +43,10 @@ sudo sh freebsd-ipa-client.sh --unattended \
 and skips the final confirmation (that part is also available alone as
 `--yes`). Without a terminal it also requires `--password` up front.
 
+If your IPA DNS publishes `_ldap._tcp` SRV records (the default when IPA
+manages DNS), `--server` can be omitted: unattended runs discover it from
+`--domain`, and interactive runs offer the discovered server as the default.
+
 ## Enrollment modes
 
 | Mode | Flag | How the host keytab is obtained |
