@@ -169,5 +169,41 @@ else
     fail "auto without a password fails explicitly"
 fi
 
+# --- 7. hosts file: append once, replace on IP change -------------------------
+reset_stubs
+printf '127.0.0.1 localhost\n' > "$TMP/hosts"
+update_hosts_file "$TMP/hosts" "10.0.0.50" "client.example.com" "client"
+update_hosts_file "$TMP/hosts" "10.0.0.50" "client.example.com" "client"
+if [ "$(grep -c "client.example.com" "$TMP/hosts")" -eq 1 ] \
+    && grep -q "^10.0.0.50[[:space:]][[:space:]]*client.example.com client$" "$TMP/hosts"; then
+    pass "hosts entry appended once (idempotent)"
+else
+    fail "hosts entry appended once (idempotent)"
+fi
+update_hosts_file "$TMP/hosts" "10.0.0.99" "client.example.com" "client"
+if [ "$(grep -c "client.example.com" "$TMP/hosts")" -eq 1 ] \
+    && grep -q "^10.0.0.99[[:space:]][[:space:]]*client.example.com client$" "$TMP/hosts"; then
+    pass "hosts entry replaced on IP change"
+else
+    fail "hosts entry replaced on IP change"
+fi
+
+# --- 8. IP auto-detection from the default route ------------------------------
+reset_stubs
+cat > "$FAKEBIN/route" <<'EOF'
+#!/bin/sh
+printf 'route to: default\ndestination: default\nmask: default\ngateway: 10.0.0.1\nfib: 0\ninterface: em0\n'
+EOF
+cat > "$FAKEBIN/ifconfig" <<'EOF'
+#!/bin/sh
+printf 'em0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500\n\tinet 10.0.0.50 netmask 0xffffff00 broadcast 10.0.0.255\n\tinet6 fe80::1%%em0 prefixlen 64 scopeid 0x1\n'
+EOF
+chmod +x "$FAKEBIN/route" "$FAKEBIN/ifconfig"
+if [ "$(detect_ip)" = "10.0.0.50" ]; then
+    pass "detect_ip uses default-route interface IPv4"
+else
+    fail "detect_ip uses default-route interface IPv4 [got '$(detect_ip)']"
+fi
+
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

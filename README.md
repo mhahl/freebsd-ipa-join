@@ -59,6 +59,7 @@ Packages installed via `pkg`: `security/sssd`, `security/sudo`,
 
 Files written (originals backed up to `/var/backups/ipa-client`):
 
+- system hostname set to the enrolled FQDN, plus an `/etc/hosts` entry for it (`--ip` overrides the default-route auto-detection)
 - `/etc/krb5.conf` — realm, KDC, host keytab location
 - `/usr/local/etc/ipa/ca.crt` + `/etc/ipa/ca.crt` — IPA CA certificate
 - `/usr/local/etc/ipa/krb5.keytab` (0600) — host keytab

@@ -36,6 +36,7 @@ SSSD_CONF="/usr/local/etc/sssd/sssd.conf"
 LDAP_CONF="/usr/local/etc/openldap/ldap.conf"
 KRB5_CONF="/etc/krb5.conf"
 NSSWITCH_CONF="/etc/nsswitch.conf"
+HOSTS_FILE="/etc/hosts"
 
 # Collected inputs (defaults filled in main)
 IPA_SERVER=""
@@ -45,6 +46,7 @@ CLIENT_FQDN=""
 IPA_USER="admin"
 IPA_PASSWORD=""
 ENROLL_MODE="auto"          # auto | keytab-file | keytab-url | otp
+HOST_IP=""                  # this host's IP for /etc/hosts (empty = auto-detect)
 KEYTAB_SRC=""               # path or URL for keytab
 OTP=""
 ENABLE_MKHOMEDIR="yes"
@@ -178,6 +180,8 @@ gather_inputs() {
 
     CLIENT_FQDN="$(t_input "This client's FQDN (auto mode adds it to IPA):" "$def_fqdn" "Hostname")" || return 1
 
+    HOST_IP="$(t_input "This host's IP for /etc/hosts (blank to auto-detect):" "$(detect_ip)" "Host IP")" || return 1
+
     IPA_USER="$(t_input "Privileged IPA user (host management + verify, e.g. admin):" "${IPA_USER:-admin}" "IPA user")" || return 1
 
     # Enrollment mode menu (curses radiolist when dialog exists)
@@ -229,6 +233,7 @@ confirm_summary() {
   Domain     : $IPA_DOMAIN
   Realm      : $IPA_REALM
   Client FQDN: $CLIENT_FQDN
+  Host IP    : ${HOST_IP:-(auto-detect)}
   IPA user   : $IPA_USER
   Enroll     : $_enroll
   mkhomedir  : $ENABLE_MKHOMEDIR
@@ -282,6 +287,53 @@ sync_time() {
         run_or_dry sysrc ntpd_enable=YES
         run_or_dry service ntpd start || run_or_dry ntpdate -b "$IPA_SERVER" || true
     fi
+}
+
+detect_ip() {
+    # IPv4 address of the default-route interface; empty when undetectable.
+    _gw_if="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    if [ -n "$_gw_if" ]; then
+        ifconfig "$_gw_if" 2>/dev/null | awk '/^[[:space:]]*inet /{print $2; exit}'
+    fi
+}
+
+update_hosts_file() { # $1=hosts file $2=ip $3=fqdn $4=short name; idempotent
+    [ -n "$2" ] || return 0
+    _esc="$(printf '%s' "$3" | sed 's/\./\\./g')"
+    if grep -Eq "[[:space:]]$_esc([[:space:]]|\$)" "$1" 2>/dev/null; then
+        sed -i '' -E "/[[:space:]]$_esc([[:space:]]|\$)/s|.*|$2	$3 $4|" "$1"
+    else
+        printf '%s\t%s %s\n' "$2" "$3" "$4" >> "$1"
+    fi
+}
+
+configure_hostname_hosts() {
+    # Kerberos and SSSD are sensitive to forward resolution of the host FQDN,
+    # so pin the system hostname and a hosts entry to the enrolled name.
+    log "== hostname + hosts =="
+    if [ "$DRY_RUN" = "yes" ]; then
+        log "[dry-run] sysrc hostname=$CLIENT_FQDN && hostname $CLIENT_FQDN"
+        log "[dry-run] ensure $HOSTS_FILE entry for $CLIENT_FQDN"
+        return 0
+    fi
+    if [ "$(hostname)" != "$CLIENT_FQDN" ]; then
+        sysrc hostname="$CLIENT_FQDN"
+        hostname "$CLIENT_FQDN"
+        log "hostname set to $CLIENT_FQDN"
+    else
+        log "hostname already $CLIENT_FQDN"
+    fi
+    _short="${CLIENT_FQDN%%.*}"
+    if [ -z "$HOST_IP" ]; then
+        HOST_IP="$(detect_ip)"
+    fi
+    if [ -z "$HOST_IP" ]; then
+        log "warning: could not determine host IP; skipping $HOSTS_FILE entry (re-run with --ip <addr>)"
+        return 0
+    fi
+    backup_file "$HOSTS_FILE"
+    update_hosts_file "$HOSTS_FILE" "$HOST_IP" "$CLIENT_FQDN" "$_short"
+    log "hosts: $HOST_IP $CLIENT_FQDN $_short"
 }
 
 fetch_ca() {
@@ -649,7 +701,7 @@ do_uninstall() {
     service sssd stop 2>/dev/null || true
     sysrc -x sssd_enable 2>/dev/null || true
     for f in "$KRB5_CONF" "$SSSD_CONF" "$LDAP_CONF" "$NSSWITCH_CONF" \
-             "$IPA_CONF" \
+             "$IPA_CONF" "$HOSTS_FILE" \
              /etc/pam.d/system /etc/pam.d/sshd /etc/pam.d/sudo; do
         b="$BACKUP_DIR/$(echo "$f" | tr '/' '_').bak"
         if [ -f "$b" ]; then cp -p "$b" "$f"; log "restored $f"; fi
@@ -674,6 +726,7 @@ Options:
   --domain DOMAIN      IPA DNS domain
   --realm REALM        Kerberos realm (default: upper(domain))
   --hostname FQDN      this client's FQDN
+  --ip ADDR            this host's IP for the /etc/hosts entry (default: auto-detect)
   --user NAME          IPA user with host-management rights (default: admin)
   --password PW        (else prompted securely; never stored)
   --auto               automatic host-add + keytab pull (default)
@@ -701,6 +754,7 @@ main() {
             --domain) IPA_DOMAIN="$2"; shift 2 ;;
             --realm) IPA_REALM="$2"; shift 2 ;;
             --hostname) CLIENT_FQDN="$2"; shift 2 ;;
+            --ip) HOST_IP="$2"; shift 2 ;;
             --user) IPA_USER="$2"; shift 2 ;;
             --password) IPA_PASSWORD="$2"; shift 2 ;;
             --auto) ENROLL_MODE="auto"; shift ;;
@@ -737,6 +791,7 @@ main() {
 
     install_packages
     sync_time
+    configure_hostname_hosts
     fetch_ca
     # krb5 + ipa client config must precede auto enrollment (kinit/ipa CLI)
     write_krb5_conf
