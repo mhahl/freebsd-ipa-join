@@ -1,8 +1,8 @@
-# FREEBSD-IPA-CLIENT.SH(8) — enroll FreeBSD in FreeIPA
+# FREEBSD-IPA-CLIENT.SH(8) - enroll FreeBSD in FreeIPA
 
 ## NAME
 
-`freebsd-ipa-client.sh` — enroll a FreeBSD host in FreeIPA (users/groups via SSSD, HBAC, sudo)
+`freebsd-ipa-client.sh` - enroll a FreeBSD host in FreeIPA (users/groups via SSSD, HBAC, sudo)
 
 ## SYNOPSIS
 
@@ -14,7 +14,7 @@ sudo sh freebsd-ipa-client.sh --unattended --server SERVER --domain DOMAIN \
 
 ## DESCRIPTION
 
-Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa host-add`) and pulls its keytab (`ipa-getkeytab`) with the credentials entered at setup. No manual steps on the IPA server.
+Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa host-add`) and pulls its keytab (`ipa-getkeytab`) with the credentials you enter at setup. No manual steps on the IPA server.
 
 ## OPTIONS
 
@@ -25,7 +25,7 @@ Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa 
 --hostname FQDN    This client's FQDN. Default: hostname qualified with DOMAIN.
 --ip ADDR          This host's IP for /etc/hosts. Default: default-route interface.
 --user NAME        IPA user with host-management rights. Default: admin.
---password PW      Else prompted securely; never stored.
+--password PW      Else read with echo disabled; never stored.
 --auto             host-add + keytab pull. Default.
 --keytab-file PATH Keytab exported on the IPA server.
 --keytab-url URL   Keytab fetched over http(s). Remove from web root after.
@@ -59,14 +59,16 @@ sudo -U admin -l                           # verify IPA sudo rules
 
 ## FILES
 
-Originals backed up to `/var/backups/ipa-client`.
+The script backs up every original to `/var/backups/ipa-client`.
+`templates/` (repo only) holds the source of every generated file,
+rendered with `envsubst` at install time.
 
 ```text
 /etc/krb5.conf                     realm, KDC, host keytab location
 /etc/nsswitch.conf                 passwd/group/sudoers: files sss
 /etc/pam.d/system, sshd, sudo      pam_sss + pam_mkhomedir
 /etc/ssh/sshd_config, ssh_config   GSSAPI enabled
-/etc/hosts                         FQDN entry; system hostname set to FQDN
+/etc/hosts                         FQDN entry; sets system hostname to FQDN
 /usr/local/etc/ipa/ca.crt          IPA CA certificate
 /usr/local/etc/ipa/krb5.keytab     host keytab, 0600
 /usr/local/etc/ipa/default.conf    server/realm pointers (LOCALBASE path)

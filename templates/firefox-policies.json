@@ -1,0 +1,8 @@
+{
+  "policies": {
+    "Authentication": {
+      "SPNEGO": [${POLICY_DOMAINS}],
+      "Delegated": [${POLICY_DOMAINS}]
+    }
+  }
+}

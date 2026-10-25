@@ -28,6 +28,12 @@ if ! command -V backup_file 2>/dev/null | grep -q 'function'; then
     }
 fi
 
+if ! command -V render_template 2>/dev/null | grep -q 'function'; then
+    _rd="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+    # shellcheck source=render.sh
+    . "$_rd/render.sh"
+fi
+
 IPA_SSO_DOMAINS="${IPA_SSO_DOMAINS:-${IPA_DOMAIN:-}}"
 FIREFOX_DIR="${FIREFOX_DIR:-/usr/local/lib/firefox}"
 
@@ -60,16 +66,7 @@ if [ "${DRY_RUN:-no}" = "yes" ]; then
     log "[dry-run] plugin firefox-sso: write $_pol (SPNEGO+Delegated: $IPA_SSO_DOMAINS)"
     exit 0
 fi
-mkdir -p "$FIREFOX_DIR/distribution" || exit 1
-cat > "$_pol" <<EOF
-{
-  "policies": {
-    "Authentication": {
-      "SPNEGO": [$_list],
-      "Delegated": [$_list]
-    }
-  }
-}
-EOF
-chmod 644 "$_pol"
+# shellcheck disable=SC2034  # reached via the render_template var list below
+POLICY_DOMAINS="$_list"
+render_template firefox-policies.json "$_pol" '$POLICY_DOMAINS'
 log "plugin firefox-sso: wrote $_pol"

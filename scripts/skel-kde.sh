@@ -27,6 +27,12 @@ if ! command -V backup_file 2>/dev/null | grep -q 'function'; then
     }
 fi
 
+if ! command -V render_template 2>/dev/null | grep -q 'function'; then
+    _rd="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+    # shellcheck source=render.sh
+    . "$_rd/render.sh"
+fi
+
 SKEL_DIR="${SKEL_DIR:-/etc/skel}"
 SKEL_PAM_FILES="${SKEL_PAM_FILES:-/etc/pam.d/system /etc/pam.d/sshd /etc/pam.d/sudo}"
 
@@ -34,23 +40,7 @@ if [ "${DRY_RUN:-no}" = "yes" ]; then
     log "[dry-run] plugin skel-kde: seed $SKEL_DIR/.config/kdeglobals; pin skeldir=$SKEL_DIR on pam_mkhomedir"
     exit 0
 fi
-mkdir -p "$SKEL_DIR/.config" || exit 1
-if [ -e "$SKEL_DIR/.config/kdeglobals" ]; then
-    backup_file "$SKEL_DIR/.config/kdeglobals" || true
-fi
-cat > "$SKEL_DIR/.config/kdeglobals" <<'EOF'
-# Managed by freebsd-ipa-client.sh plugin skel-kde
-[General]
-ColorScheme=Breeze
-Name=Breeze
-
-[Icons]
-Theme=breeze
-
-[KDE]
-widgetStyle=Breeze
-EOF
-chmod 644 "$SKEL_DIR/.config/kdeglobals"
+render_template kdeglobals "$SKEL_DIR/.config/kdeglobals"
 log "plugin skel-kde: seeded $SKEL_DIR/.config/kdeglobals"
 for _pam in $SKEL_PAM_FILES; do
     if [ ! -f "$_pam" ]; then

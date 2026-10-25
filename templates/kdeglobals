@@ -1,0 +1,10 @@
+# Managed by freebsd-ipa-client.sh plugin skel-kde
+[General]
+ColorScheme=Breeze
+Name=Breeze
+
+[Icons]
+Theme=breeze
+
+[KDE]
+widgetStyle=Breeze
