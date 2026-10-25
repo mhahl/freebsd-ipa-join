@@ -493,16 +493,16 @@ else
     fail "short hostname qualifies with plain domain"
 fi
 
-# --- 18. pam_sss allows the OTP second factor -------------------------------
+# --- 18. base PAM patch stays single-prompt (OTP lives in the plugin) -----
 reset_stubs
 ENABLE_MKHOMEDIR="yes"
 printf 'auth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\naccount\t\trequired\tpam_unix.so\npassword\trequired\tpam_unix.so\t\tno_warn try_first_pass\nsession\t\trequired\tpam_lastlog.so\t\tno_fail\n' > "$TMP/system.pam"
 patch_pam_file "$TMP/system.pam"
-if grep -q "pam_sss.so.*forward_pass" "$TMP/system.pam" \
-    && ! grep -q "pam_sss.so.*use_first_pass" "$TMP/system.pam"; then
-    pass "fresh PAM patch uses forward_pass (2FA-capable)"
+if grep -q "pam_sss.so.*use_first_pass" "$TMP/system.pam" \
+    && ! grep -q "pam_sss.so.*forward_pass" "$TMP/system.pam"; then
+    pass "fresh PAM patch uses use_first_pass (OTP needs --plugins otp)"
 else
-    fail "fresh PAM patch uses forward_pass (2FA-capable)"
+    fail "fresh PAM patch uses use_first_pass (OTP needs --plugins otp)"
 fi
 patch_pam_file "$TMP/system.pam"
 if [ "$(grep -c "pam_sss.so" "$TMP/system.pam")" -eq 3 ] \
@@ -513,13 +513,146 @@ else
 fi
 printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\nauth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\n' > "$TMP/old.pam"
 patch_pam_file "$TMP/old.pam"
-if grep -q "pam_sss.so.*forward_pass" "$TMP/old.pam" \
-    && ! grep -q "pam_sss.so.*use_first_pass" "$TMP/old.pam" \
+if grep -q "pam_sss.so.*use_first_pass" "$TMP/old.pam" \
     && [ "$(grep -c "pam_sss.so" "$TMP/old.pam")" -eq 1 ]; then
-    pass "older use_first_pass installs upgrade to forward_pass"
+    pass "base patch leaves existing use_first_pass alone (plugin upgrades it)"
 else
-    fail "older use_first_pass installs upgrade to forward_pass"
+    fail "base patch leaves existing use_first_pass alone (plugin upgrades it)"
 fi
+
+# --- 19. optional plugins from scripts/ via --plugins ------------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+SDDM_CONF="$TMP/textonly.conf"
+PLUGINS="sddm-textonly"
+DRY_RUN="no"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "^\[Theme\]$" "$SDDM_CONF" \
+    && grep -q "^Current=breeze$" "$SDDM_CONF" \
+    && grep -q "^EnableAvatars=false$" "$SDDM_CONF" \
+    && grep -q "^DisableAvatarsThreshold=0$" "$SDDM_CONF" \
+    && grep -q "^\[Users\]$" "$SDDM_CONF" \
+    && grep -q "^MinimumUid=99999$" "$SDDM_CONF" \
+    && grep -q "^MaximumUid=99999$" "$SDDM_CONF" \
+    && grep -q "^RememberLastUser=false$" "$SDDM_CONF"; then
+    pass "plugin sddm-textonly writes the text-only greeter config"
+else
+    fail "plugin sddm-textonly writes the text-only greeter config [rc=$rc]"
+fi
+rm -f "$SDDM_CONF"
+DRY_RUN="yes"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$SDDM_CONF" ]; then
+    pass "plugins honor dry-run (log, change nothing)"
+else
+    fail "plugins honor dry-run (log, change nothing) [rc=$rc]"
+fi
+DRY_RUN="no"
+PLUGINS=""
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ]; then
+    pass "empty --plugins list is a no-op"
+else
+    fail "empty --plugins list is a no-op [rc=$rc]"
+fi
+PLUGINS="../evil"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "plugin names with path traversal are rejected"
+else
+    fail "plugin names with path traversal are rejected"
+fi
+PLUGINS="no-such-plugin"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "missing plugin fails explicitly"
+else
+    fail "missing plugin fails explicitly"
+fi
+mkdir -p "$TMP/fakeplugins"
+printf 'exit 3\n' > "$TMP/fakeplugins/boom.sh"
+PLUGIN_DIR="$TMP/fakeplugins"
+PLUGINS="boom"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "failing plugin aborts the run"
+else
+    fail "failing plugin aborts the run"
+fi
+
+# --- 20. otp plugin upgrades pam_sss to forward_pass (2FA) ------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+OTP_PAM_FILES="$TMP/otp-system.pam $TMP/otp-missing.pam"
+PLUGINS="otp"
+DRY_RUN="no"
+printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\nauth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\n' > "$TMP/otp-system.pam"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "pam_sss.so.*forward_pass" "$TMP/otp-system.pam" \
+    && ! grep -q "use_first_pass.*pam_sss\|pam_sss.so.*use_first_pass" "$TMP/otp-system.pam" \
+    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ]; then
+    pass "otp plugin upgrades use_first_pass to forward_pass, skips missing files"
+else
+    fail "otp plugin upgrades use_first_pass to forward_pass, skips missing files [rc=$rc]"
+fi
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ]; then
+    pass "otp plugin re-run is a no-op on forward_pass"
+else
+    fail "otp plugin re-run is a no-op on forward_pass [rc=$rc]"
+fi
+printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\n' > "$TMP/otp-dry.pam"
+OTP_PAM_FILES="$TMP/otp-dry.pam"
+DRY_RUN="yes"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && grep -q "pam_sss.so.*use_first_pass" "$TMP/otp-dry.pam"; then
+    pass "otp plugin honors dry-run (logs, changes nothing)"
+else
+    fail "otp plugin honors dry-run (logs, changes nothing) [rc=$rc]"
+fi
+DRY_RUN="no"
+printf 'auth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\n' > "$TMP/otp-bare.pam"
+OTP_PAM_FILES="$TMP/otp-bare.pam"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q "pam_sss" "$TMP/otp-bare.pam"; then
+    pass "otp plugin warns and leaves files without pam_sss alone"
+else
+    fail "otp plugin warns and leaves files without pam_sss alone [rc=$rc]"
+fi
+
+# --- 21. plugins run directly as standalone scripts -------------------------
+reset_stubs
+if [ -x "$ROOT/scripts/otp.sh" ] && [ -x "$ROOT/scripts/sddm-textonly.sh" ]; then
+    pass "plugins are directly executable"
+else
+    fail "plugins are directly executable"
+fi
+printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\n' > "$TMP/otp-direct.pam"
+export OTP_PAM_FILES="$TMP/otp-direct.pam" DRY_RUN="no" BACKUP_DIR="$TMP/backups"
+out="$(sh "$ROOT/scripts/otp.sh" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "pam_sss.so.*forward_pass" "$TMP/otp-direct.pam" \
+    && ! printf '%s' "$out" | grep -q "not found"; then
+    pass "otp plugin runs directly (standalone helpers, no 'not found')"
+else
+    fail "otp plugin runs directly (standalone helpers, no 'not found') [rc=$rc out='$out']"
+fi
+rm -f "$TMP/direct-textonly.conf"
+export SDDM_CONF="$TMP/direct-textonly.conf" DRY_RUN="no"
+out="$(sh "$ROOT/scripts/sddm-textonly.sh" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "^Current=breeze$" "$TMP/direct-textonly.conf" \
+    && grep -q "^RememberLastUser=false$" "$TMP/direct-textonly.conf" \
+    && ! printf '%s' "$out" | grep -q "not found"; then
+    pass "sddm-textonly plugin runs directly (standalone helpers)"
+else
+    fail "sddm-textonly plugin runs directly (standalone helpers) [rc=$rc out='$out']"
+fi
+export DRY_RUN="no"
+unset OTP_PAM_FILES SDDM_CONF || true
 
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"

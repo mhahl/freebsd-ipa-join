@@ -37,6 +37,8 @@ LDAP_CONF="/usr/local/etc/openldap/ldap.conf"
 KRB5_CONF="/etc/krb5.conf"
 NSSWITCH_CONF="/etc/nsswitch.conf"
 HOSTS_FILE="/etc/hosts"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+PLUGIN_DIR="${PLUGIN_DIR:-$SCRIPT_DIR/scripts}"
 
 # Collected inputs (defaults filled in main)
 IPA_SERVER=""
@@ -56,6 +58,7 @@ ENUMERATE="no"
 DRY_RUN="no"
 UNATTENDED="no"
 YES="no"
+PLUGINS=""               # comma-separated names from scripts/, via --plugins
 
 # ---------------------------------------------------------------- helpers ---
 
@@ -237,6 +240,7 @@ confirm_summary() {
   mkhomedir  : $ENABLE_MKHOMEDIR
   sudo (IPA) : $ENABLE_SUDO
   HBAC       : $ENABLE_HBAC
+  Plugins    : ${PLUGINS:-(none)}
 
 Packages will be installed, configs rewritten (backups in $BACKUP_DIR).
 KDE/sddm logins keep working (patched via system PAM)."
@@ -694,19 +698,14 @@ patch_pam_file() { # $1=pam file
     f="$1"
     [ -f "$f" ] || { log "skip missing $f"; return 0; }
     backup_file "$f"
+    # OTP/2FA prompting lives in the otp plugin (--plugins otp), not here:
+    # the base install stays single-prompt (use_first_pass).
     if grep -q "pam_sss.so" "$f"; then
-        # normalize older installs: use_first_pass never prompts, which
-        # blocks the OTP second factor; forward_pass allows it.
-        if grep -q "pam_sss\.so.*use_first_pass" "$f"; then
-            sed -i '' -E "s|pam_sss\.so(.*)use_first_pass|pam_sss.so\1forward_pass|g" "$f"
-            log "$f upgraded pam_sss to forward_pass (2FA)"
-        else
-            log "$f already has pam_sss"
-        fi
+        log "$f already has pam_sss"
     else
         tmp="$(mktemp)"
         awk '
-          /^auth.*pam_unix\.so/ && !a_done { print "auth\t\tsufficient\t/usr/local/lib/pam_sss.so\t\tforward_pass"; a_done=1 }
+          /^auth.*pam_unix\.so/ && !a_done { print "auth\t\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass"; a_done=1 }
           /^account.*pam_unix\.so/ && !c_done { print "account\t\trequired\t/usr/local/lib/pam_sss.so\t\tignore_unknown_user ignore_authinfo_unavail"; c_done=1 }
           /^password.*pam_unix\.so/ && !p_done { print "password\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_authtok"; p_done=1 }
           { print }
@@ -752,6 +751,32 @@ enable_services() {
         sleep 2
         service sssd status || log "warning: sssd not running; see /var/log/sssd/"
     fi
+}
+
+run_plugins() {
+    # Optional post-config steps from scripts/ (e.g. --plugins sddm-textonly).
+    # Each plugin is sourced in a subshell: it sees the main script's helpers
+    # (log, backup_file) and variables (DRY_RUN, BACKUP_DIR, IPA_*, ...), but
+    # cannot leak assignments back. A failing plugin aborts the run so
+    # half-applied extras never go unnoticed. PLUGIN_DIR is overridable
+    # (the test suite points it at fixtures).
+    [ -z "${PLUGINS:-}" ] && return 0
+    log "== running plugins: $PLUGINS =="
+    _rest="$PLUGINS"
+    while [ -n "$_rest" ]; do
+        case "$_rest" in
+            *,*) _p="${_rest%%,*}"; _rest="${_rest#*,}" ;;
+            *)   _p="$_rest"; _rest="" ;;
+        esac
+        case "$_p" in
+            ""|*/*|*".."*|*[!A-Za-z0-9_-]*)
+                die "bad plugin name '$_p' (comma-separated names from $PLUGIN_DIR)" ;;
+        esac
+        _f="$PLUGIN_DIR/$_p.sh"
+        [ -f "$_f" ] || die "plugin not found: $_f (ships in scripts/; see scripts/README.md)"
+        log "--- plugin: $_p ---"
+        ( . "$_f" ) || die "plugin '$_p' failed"
+    done
 }
 
 verify() {
@@ -836,6 +861,7 @@ Options:
   --no-sudo            skip IPA sudo provider
   --permit             disable HBAC enforcement (access=permit, debug only)
   --enumerate          set enumerate=True (lists ALL users in getent; slow)
+  --plugins LIST       comma-separated extras from scripts/ (e.g. sddm-textonly)
   --dry-run            print actions without changing the system
   --unattended         never prompt: fail if required inputs are missing
   --yes                skip the final confirmation
@@ -857,6 +883,7 @@ main() {
             --ip) HOST_IP="$2"; shift 2 ;;
             --user) IPA_USER="$2"; shift 2 ;;
             --password) IPA_PASSWORD="$2"; shift 2 ;;
+            --plugins) PLUGINS="$2"; shift 2 ;;
             --auto) ENROLL_MODE="auto"; shift ;;
             --keytab-file) ENROLL_MODE="keytab-file"; KEYTAB_SRC="$2"; shift 2 ;;
             --keytab-url) ENROLL_MODE="keytab-url"; KEYTAB_SRC="$2"; shift 2 ;;
@@ -923,6 +950,7 @@ main() {
     configure_nsswitch
     configure_pam_ssh
     enable_services
+    run_plugins
 
     if verify; then
         t_msg "Enrolled OK.\n\nTest: ssh '$IPA_USER@$(hostname)' / id $IPA_USER / sudo -U $IPA_USER -l\nHBAC: grant this host access server-side or logins are denied (by design).\nSudo rules come from IPA (sudoers: sss). Logs: /var/log/sssd/." "Done"
