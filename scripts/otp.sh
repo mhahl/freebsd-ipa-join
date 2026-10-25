@@ -1,12 +1,15 @@
 #!/bin/sh
 # plugin: otp -- allow the OTP/2FA second factor in pam_sss logins.
 #
-# Rewrites use_first_pass to forward_pass on the system, sshd, and sudo PAM
-# stacks. use_first_pass never prompts, so when the KDC answers with an OTP
-# challenge SSSD has nothing to reply with and the login dies with
-# "Preauthentication failed" (no second prompt ever appears). forward_pass
-# forwards the first password and still prompts for the OTP code.
-# Single-line pass+OTP keeps working either way.
+# Rewrites use_first_pass to forward_pass on the system, sshd, sudo, and
+# LightDM PAM stacks. use_first_pass never prompts, so when the KDC answers
+# with an OTP challenge SSSD has nothing to reply with and the login dies
+# with "Preauthentication failed" (no second prompt ever appears).
+# forward_pass forwards the first password and still prompts for the OTP
+# code, so both SSH and graphical (LightDM) logins get a second token
+# prompt. Single-line pass+OTP keeps working either way.
+# SDDM is intentionally not covered: its helper cannot drive a two-message
+# PAM conversation (it segfaults), so 2FA users log in via LightDM instead.
 #
 # Sourced by freebsd-ipa-client.sh after the base configuration when
 # requested:  sh freebsd-ipa-client.sh --plugins otp
@@ -30,7 +33,7 @@ if ! command -V backup_file 2>/dev/null | grep -q 'function'; then
     }
 fi
 
-OTP_PAM_FILES="${OTP_PAM_FILES:-/etc/pam.d/system /etc/pam.d/sshd /etc/pam.d/sudo}"
+OTP_PAM_FILES="${OTP_PAM_FILES:-/etc/pam.d/system /etc/pam.d/sshd /etc/pam.d/sudo /usr/local/etc/pam.d/lightdm}"
 
 for _pam in $OTP_PAM_FILES; do
     if [ ! -f "$_pam" ]; then
@@ -49,6 +52,8 @@ for _pam in $OTP_PAM_FILES; do
         fi
     elif grep -q "pam_sss\.so" "$_pam"; then
         log "plugin otp: $_pam has pam_sss with no pass flag; leaving alone"
+    elif grep -q "include.*system" "$_pam"; then
+        log "plugin otp: $_pam has no pam_sss line (covered via system include)"
     else
         log "plugin otp: warning: no pam_sss line in $_pam (base PAM step did not run?)"
     fi

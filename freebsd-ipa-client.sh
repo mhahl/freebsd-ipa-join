@@ -147,7 +147,8 @@ prechecks() {
         fi
     fi
     # KDE/desktop-installer coexistence: nothing IPA touches conflicts with KDE.
-    # sddm logins go through /etc/pam.d/system, which we patch compatibly.
+    # LightDM logins go through /usr/local/etc/pam.d/lightdm (covered by
+    # the otp plugin); console/SSH go through /etc/pam.d/system.
     if [ ! -d /usr/local/etc/pam.d ] && [ ! -d /etc/pam.d ]; then
         die "/etc/pam.d missing; not a FreeBSD system?"
     fi
@@ -243,7 +244,7 @@ confirm_summary() {
   Plugins    : ${PLUGINS:-(none)}
 
 Packages will be installed, configs rewritten (backups in $BACKUP_DIR).
-KDE/sddm logins keep working (patched via system PAM)."
+Graphical (LightDM) and SSH logins keep working (see --plugins otp for 2FA)."
     t_yesno "$sum" "Confirm"
 }
 
@@ -754,7 +755,7 @@ enable_services() {
 }
 
 run_plugins() {
-    # Optional post-config steps from scripts/ (e.g. --plugins sddm-textonly).
+    # Optional post-config steps from scripts/ (e.g. --plugins otp).
     # Each plugin is sourced in a subshell: it sees the main script's helpers
     # (log, backup_file) and variables (DRY_RUN, BACKUP_DIR, IPA_*, ...), but
     # cannot leak assignments back. A failing plugin aborts the run so
@@ -861,7 +862,7 @@ Options:
   --no-sudo            skip IPA sudo provider
   --permit             disable HBAC enforcement (access=permit, debug only)
   --enumerate          set enumerate=True (lists ALL users in getent; slow)
-  --plugins LIST       comma-separated extras from scripts/ (e.g. sddm-textonly)
+  --plugins LIST       comma-separated extras from scripts/ (e.g. otp,netgroup-yp)
   --dry-run            print actions without changing the system
   --unattended         never prompt: fail if required inputs are missing
   --yes                skip the final confirmation
@@ -902,7 +903,7 @@ main() {
     done
 
     prechecks
-    t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nKDE/sddm already installed: untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
+    t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nExisting desktop (LightDM/KDE): untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
 
     # unattended discovery: --domain alone suffices when DNS SRV exists
     if [ "$UNATTENDED" = "yes" ] && [ -z "$IPA_SERVER" ] && [ -n "$IPA_DOMAIN" ]; then

@@ -525,27 +525,12 @@ fi
 # --- 19. optional plugins from scripts/ via --plugins ------------------------
 reset_stubs
 PLUGIN_DIR="$ROOT/scripts"
-SDDM_CONF="$TMP/textonly.conf"
-PLUGINS="sddm-textonly"
-DRY_RUN="no"
-( run_plugins ); rc=$?
-if [ "$rc" -eq 0 ] \
-    && grep -q "^\[Theme\]$" "$SDDM_CONF" \
-    && grep -q "^Current=breeze$" "$SDDM_CONF" \
-    && grep -q "^EnableAvatars=false$" "$SDDM_CONF" \
-    && grep -q "^DisableAvatarsThreshold=0$" "$SDDM_CONF" \
-    && grep -q "^\[Users\]$" "$SDDM_CONF" \
-    && grep -q "^MinimumUid=99999$" "$SDDM_CONF" \
-    && grep -q "^MaximumUid=99999$" "$SDDM_CONF" \
-    && grep -q "^RememberLastUser=false$" "$SDDM_CONF"; then
-    pass "plugin sddm-textonly writes the text-only greeter config"
-else
-    fail "plugin sddm-textonly writes the text-only greeter config [rc=$rc]"
-fi
-rm -f "$SDDM_CONF"
+OTP_PAM_FILES="$TMP/dryrun.pam"
+PLUGINS="otp"
+printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\n' > "$TMP/dryrun.pam"
 DRY_RUN="yes"
 ( run_plugins ); rc=$?
-if [ "$rc" -eq 0 ] && [ ! -e "$SDDM_CONF" ]; then
+if [ "$rc" -eq 0 ] && grep -q "pam_sss.so.*use_first_pass" "$TMP/dryrun.pam"; then
     pass "plugins honor dry-run (log, change nothing)"
 else
     fail "plugins honor dry-run (log, change nothing) [rc=$rc]"
@@ -586,22 +571,26 @@ fi
 # --- 20. otp plugin upgrades pam_sss to forward_pass (2FA) ------------------
 reset_stubs
 PLUGIN_DIR="$ROOT/scripts"
-OTP_PAM_FILES="$TMP/otp-system.pam $TMP/otp-missing.pam"
+OTP_PAM_FILES="$TMP/otp-system.pam $TMP/otp-lightdm.pam $TMP/otp-missing.pam"
 PLUGINS="otp"
 DRY_RUN="no"
 printf 'auth\tsufficient\t/usr/local/lib/pam_sss.so\t\tuse_first_pass\nauth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\n' > "$TMP/otp-system.pam"
+printf '# LightDM-style stack with its own sss line\npasswd\tinclude\t\tsystem\nauth\tsufficient\tpam_sss.so\t\tuse_first_pass\n' > "$TMP/otp-lightdm.pam"
 ( run_plugins ); rc=$?
 if [ "$rc" -eq 0 ] \
     && grep -q "pam_sss.so.*forward_pass" "$TMP/otp-system.pam" \
     && ! grep -q "use_first_pass.*pam_sss\|pam_sss.so.*use_first_pass" "$TMP/otp-system.pam" \
-    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ]; then
-    pass "otp plugin upgrades use_first_pass to forward_pass, skips missing files"
+    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ] \
+    && grep -q "pam_sss.so.*forward_pass" "$TMP/otp-lightdm.pam" \
+    && [ "$(grep -c "pam_sss" "$TMP/otp-lightdm.pam")" -eq 1 ]; then
+    pass "otp plugin upgrades use_first_pass to forward_pass, incl. lightdm"
 else
-    fail "otp plugin upgrades use_first_pass to forward_pass, skips missing files [rc=$rc]"
+    fail "otp plugin upgrades use_first_pass to forward_pass, incl. lightdm [rc=$rc]"
 fi
 ( run_plugins ); rc=$?
 if [ "$rc" -eq 0 ] \
-    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ]; then
+    && [ "$(grep -c "pam_sss.so" "$TMP/otp-system.pam")" -eq 1 ] \
+    && [ "$(grep -c "pam_sss" "$TMP/otp-lightdm.pam")" -eq 1 ]; then
     pass "otp plugin re-run is a no-op on forward_pass"
 else
     fail "otp plugin re-run is a no-op on forward_pass [rc=$rc]"
@@ -624,10 +613,18 @@ if [ "$rc" -eq 0 ] && ! grep -q "pam_sss" "$TMP/otp-bare.pam"; then
 else
     fail "otp plugin warns and leaves files without pam_sss alone [rc=$rc]"
 fi
+printf 'auth\t\tsufficient\tpam_self.so\t\tno_warn\nauth\t\tinclude\t\tsystem\n' > "$TMP/otp-include.pam"
+OTP_PAM_FILES="$TMP/otp-include.pam"
+out="$(run_plugins 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "covered via system include"; then
+    pass "otp plugin notes stacks inheriting pam_sss via system include"
+else
+    fail "otp plugin notes stacks inheriting pam_sss via system include [rc=$rc]"
+fi
 
 # --- 21. plugins run directly as standalone scripts -------------------------
 reset_stubs
-if [ -x "$ROOT/scripts/otp.sh" ] && [ -x "$ROOT/scripts/sddm-textonly.sh" ]; then
+if [ -x "$ROOT/scripts/otp.sh" ]; then
     pass "plugins are directly executable"
 else
     fail "plugins are directly executable"
@@ -642,19 +639,8 @@ if [ "$rc" -eq 0 ] \
 else
     fail "otp plugin runs directly (standalone helpers, no 'not found') [rc=$rc out='$out']"
 fi
-rm -f "$TMP/direct-textonly.conf"
-export SDDM_CONF="$TMP/direct-textonly.conf" DRY_RUN="no"
-out="$(sh "$ROOT/scripts/sddm-textonly.sh" 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] \
-    && grep -q "^Current=breeze$" "$TMP/direct-textonly.conf" \
-    && grep -q "^RememberLastUser=false$" "$TMP/direct-textonly.conf" \
-    && ! printf '%s' "$out" | grep -q "not found"; then
-    pass "sddm-textonly plugin runs directly (standalone helpers)"
-else
-    fail "sddm-textonly plugin runs directly (standalone helpers) [rc=$rc out='$out']"
-fi
 export DRY_RUN="no"
-unset OTP_PAM_FILES SDDM_CONF || true
+unset OTP_PAM_FILES || true
 
 # --- 22. shell-default sets the IPA login shell; nothing is default-on ----
 reset_stubs
@@ -811,6 +797,78 @@ else
     fail "firefox-sso refuses to clobber an unmanaged policy [rc=$rc]"
 fi
 unset IPA_SSO_DOMAINS FIREFOX_DIR || true
+unset OTP_PAM_FILES || true
+
+# --- 27. netgroup-yp serves IPA hostgroups over loopback NIS -------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="netgroup-yp"
+NIS_DOMAIN="example.com"
+NETGROUP_FILE="$TMP/netgroup"
+SYNC_SCRIPT="$TMP/ipa-netgroup-sync"
+CRON_FILE="$TMP/ipa-netgroups.cron"
+YP_SECURNETS="$TMP/yp-securenets"
+IPA_DOMAIN="example.com"; IPA_REALM="EXAMPLE.COM"
+IPA_SERVER="idm.example.com"; CLIENT_FQDN="client.example.com"
+DRY_RUN="no"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q 'HOST_FQDN="client.example.com"' "$SYNC_SCRIPT" \
+    && grep -q 'NIS_DOMAIN="example.com"' "$SYNC_SCRIPT" \
+    && grep -Fq '(%s,,%s) (%s,,%s)' "$SYNC_SCRIPT" \
+    && grep -Fq '"$HOST_FQDN" "$NIS_DOMAIN" "$HOST_SHORT" "$NIS_DOMAIN"' "$SYNC_SCRIPT" \
+    && grep -q 'IPA_REALM="EXAMPLE.COM"' "$SYNC_SCRIPT" \
+    && grep -Fq 'host/$HOST_FQDN@$IPA_REALM' "$SYNC_SCRIPT" \
+    && grep -q 'dc=example,dc=com' "$SYNC_SCRIPT" \
+    && grep -Fq "SRC=\"$TMP/netgroup\"" "$SYNC_SCRIPT" \
+    && grep -Fq '"NETGROUP=$SRC" netgroup </dev/null' "$SYNC_SCRIPT" \
+    && grep -Fq 'if pgrep -x ypserv' "$SYNC_SCRIPT" \
+    && grep -q 'memberOf' "$SYNC_SCRIPT" \
+    && grep -q '"$MAKE" -C' "$SYNC_SCRIPT" \
+    && grep -q "@reboot root $TMP/ipa-netgroup-sync" "$CRON_FILE" \
+    && grep -q "0 \* \* \* \* root $TMP/ipa-netgroup-sync" "$CRON_FILE" \
+    && [ "$(cat "$YP_SECURNETS")" = "127.0.0.1 255.255.255.255" ] \
+    && grep -q "sysrc nisdomainname=example.com" "$STUB_LOG" \
+    && grep -q "sysrc nis_server_enable=YES" "$STUB_LOG" \
+    && grep -q "sysrc nis_client_enable=YES" "$STUB_LOG" \
+    && grep -q "sysrc nis_client_flags=-S example.com,127.0.0.1" "$STUB_LOG"; then
+    pass "netgroup-yp writes sync script, cron, loopback ACL, pins ypbind"
+else
+    fail "netgroup-yp writes sync script, cron, loopback ACL, pins ypbind [rc=$rc]"
+fi
+_before="$(cat "$SYNC_SCRIPT"; cat "$CRON_FILE")"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$SYNC_SCRIPT"; cat "$CRON_FILE")" = "$_before" ]; then
+    pass "netgroup-yp re-run is idempotent"
+else
+    fail "netgroup-yp re-run is idempotent [rc=$rc]"
+fi
+rm -f "$SYNC_SCRIPT" "$CRON_FILE" "$YP_SECURNETS"
+DRY_RUN="yes"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$SYNC_SCRIPT" ] && [ ! -e "$CRON_FILE" ]; then
+    pass "netgroup-yp honors dry-run (logs, changes nothing)"
+else
+    fail "netgroup-yp honors dry-run (logs, changes nothing) [rc=$rc]"
+fi
+DRY_RUN="no"
+printf '255.255.255.255 10.0.0.0\n' > "$YP_SECURNETS"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "netgroup-yp refuses a non-loopback securenets"
+else
+    fail "netgroup-yp refuses a non-loopback securenets [rc=$rc]"
+fi
+rm -f "$YP_SECURNETS"
+NIS_DOMAIN=""; IPA_DOMAIN=""
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "netgroup-yp fails without an NIS domain"
+else
+    fail "netgroup-yp fails without an NIS domain [rc=$rc]"
+fi
+IPA_DOMAIN="example.com"
+unset NIS_DOMAIN NETGROUP_FILE SYNC_SCRIPT CRON_FILE YP_SECURNETS || true
 
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"
