@@ -17,7 +17,7 @@
 # Also runs directly:  sudo sh scripts/netgroup-yp.sh
 # Uses the main script's log()/backup_file() when sourced, minimal
 # built-ins below when run standalone. Honors DRY_RUN.
-# Env (all overridable; the test suite redirects the paths):
+# Env (all overridable, e.g. to redirect paths for dry runs):
 #   NIS_DOMAIN   NIS domain (default: IPA_DOMAIN, must be set one way).
 #   HOST_FQDN    this host (default: CLIENT_FQDN from enrollment).
 #   IPA_SERVER, IPA_REALM, IPA_DOMAIN (from enrollment; needed to bake the

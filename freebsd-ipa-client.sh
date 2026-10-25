@@ -37,7 +37,7 @@ LDAP_CONF="/usr/local/etc/openldap/ldap.conf"
 KRB5_CONF="/etc/krb5.conf"
 NSSWITCH_CONF="/etc/nsswitch.conf"
 HOSTS_FILE="/etc/hosts"
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 PLUGIN_DIR="${PLUGIN_DIR:-$SCRIPT_DIR/scripts}"
 
 # Collected inputs (defaults filled in main)
@@ -732,11 +732,10 @@ configure_pam_ssh() {
         log "linked sudo PAM to system PAM (with sss)"
     fi
     # SSH GSSAPI for SSO + UsePAM so HBAC/sudo/session rules apply
-    for f in /etc/ssh/sshd_config; do
-        grep -q "^GSSAPIAuthentication" "$f" \
-            || printf '\nGSSAPIAuthentication yes\n' >> "$f"
-        grep -q "^UsePAM" "$f" || printf 'UsePAM yes\n' >> "$f"
-    done
+    grep -q "^GSSAPIAuthentication" /etc/ssh/sshd_config \
+        || printf '\nGSSAPIAuthentication yes\n' >> /etc/ssh/sshd_config
+    grep -q "^UsePAM" /etc/ssh/sshd_config \
+        || printf 'UsePAM yes\n' >> /etc/ssh/sshd_config
     grep -q "GSSAPIAuthentication" /etc/ssh/ssh_config 2>/dev/null \
         || printf '\nGSSAPIAuthentication yes\n' >> /etc/ssh/ssh_config
     # /home -> /usr/home compat (FreeBSD home root)
@@ -760,7 +759,7 @@ run_plugins() {
     # (log, backup_file) and variables (DRY_RUN, BACKUP_DIR, IPA_*, ...), but
     # cannot leak assignments back. A failing plugin aborts the run so
     # half-applied extras never go unnoticed. PLUGIN_DIR is overridable
-    # (the test suite points it at fixtures).
+    # (overridable for dry-run/fixture use).
     [ -z "${PLUGINS:-}" ] && return 0
     log "== running plugins: $PLUGINS =="
     _rest="$PLUGINS"
@@ -776,6 +775,7 @@ run_plugins() {
         _f="$PLUGIN_DIR/$_p.sh"
         [ -f "$_f" ] || die "plugin not found: $_f (ships in scripts/; see scripts/README.md)"
         log "--- plugin: $_p ---"
+        # shellcheck source=/dev/null
         ( . "$_f" ) || die "plugin '$_p' failed"
     done
 }

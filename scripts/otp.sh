@@ -16,7 +16,7 @@
 # Also runs directly:  sudo sh scripts/otp.sh
 # Uses the main script's log()/backup_file() when sourced, minimal
 # built-ins below when run standalone. Honors DRY_RUN.
-# OTP_PAM_FILES may list other files (the test suite does this).
+# OTP_PAM_FILES may list other files (e.g. for dry runs).
 
 # command -v is not enough: macOS ships /usr/bin/log, so require a shell
 # function before assuming the main script's helpers are present.

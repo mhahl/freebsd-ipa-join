@@ -64,5 +64,5 @@ runs use the main script's. Behavior is identical either way.
   (`DRY_RUN`, `BACKUP_DIR`, `IPA_*`, `CLIENT_FQDN`).
 - Honor `DRY_RUN=yes`: log what you would do, change nothing.
 - Any nonzero exit aborts the whole run. Fail loudly, never half-apply.
-- Keep every path overridable as `${VAR:-default}` so the test suite can
-  redirect it (see `otp.sh` and `OTP_PAM_FILES`).
+- Keep every path overridable as `${VAR:-default}` so it can be
+  redirected for dry runs (see `otp.sh` and `OTP_PAM_FILES`).
