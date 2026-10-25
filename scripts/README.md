@@ -18,6 +18,17 @@ Bundled:
   the system/sshd/sudo PAM stacks so the KDC's second-factor challenge
   reaches a prompt instead of failing with `Preauthentication failed`.
   Idempotent; safe to re-run on already-enrolled hosts.
+- `shell-default` — sets `override_shell` in `sssd.conf` (`SHELL_DEFAULT`
+  env, must be installed). Restart sssd to apply.
+- `ssh-publish` — uploads the host's `ssh_host_*_key.pub` keys to its IPA
+  entry via host-keytab auth. Full key set each run; idempotent.
+- `autofs` — IPA automount maps: `autofs` service + `autofs_provider=ipa`
+  in sssd, `[autofs]` section, enables `automountd`/`autofs`.
+- `skel-kde` — seeds `SKEL_DIR` (default `/etc/skel`) with Breeze
+  `kdeglobals` and pins `pam_mkhomedir` to it (`skeldir=`).
+- `firefox-sso` — Firefox `policies.json` with SPNEGO+Delegated for
+  `IPA_SSO_DOMAINS` (default the IPA domain). Never clobbers an existing
+  policy carrying `Authentication`.
 
 ## running directly
 

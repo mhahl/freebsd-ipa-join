@@ -30,7 +30,8 @@ Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa 
 --keytab-file PATH Keytab exported on the IPA server.
 --keytab-url URL   Keytab fetched over http(s). Remove from web root after.
 --otp OTP          One-time host password (host pre-created with OTP).
---plugins LIST     Comma-separated extras from scripts/: otp, sddm-textonly.
+--plugins LIST     Comma-separated extras from scripts/: otp, sddm-textonly,
+                   shell-default, ssh-publish, autofs, skel-kde, firefox-sso.
 --no-mkhomedir     Do not create home dirs on first login.
 --no-sudo          Skip IPA sudo provider (installs plain sudo).
 --permit           Disable HBAC enforcement. Debug only.

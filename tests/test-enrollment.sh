@@ -72,6 +72,8 @@ if [ "$1" = "host-show" ]; then
 elif [ "$1" = "host-add" ]; then
     echo "$2" >> "$STUB_ADDED"
     exit "${HOSTADD_EXIT:-0}"
+elif [ "$1" = "host-mod" ]; then
+    exit "${HOSTMOD_EXIT:-0}"
 fi
 exit 2
 EOF
@@ -653,6 +655,162 @@ else
 fi
 export DRY_RUN="no"
 unset OTP_PAM_FILES SDDM_CONF || true
+
+# --- 22. shell-default sets the IPA login shell; nothing is default-on ----
+reset_stubs
+if grep -q '^PLUGINS=""' "$ROOT/freebsd-ipa-client.sh"; then
+    pass "no plugins enabled by default (opt-in via --plugins)"
+else
+    fail "no plugins enabled by default (opt-in via --plugins)"
+fi
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="shell-default"
+SSSD_CONF="$TMP/sssd-shell.conf"
+SHELL_DEFAULT="/bin/sh"
+DRY_RUN="no"
+printf '[domain/example.com]\nipa_hostname = client.example.com\n\n[sssd]\nservices = nss, pam\n' > "$SSSD_CONF"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && grep -q "^override_shell = /bin/sh$" "$SSSD_CONF"; then
+    pass "shell-default sets override_shell in sssd.conf"
+else
+    fail "shell-default sets override_shell in sssd.conf [rc=$rc]"
+fi
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(grep -c "^override_shell" "$SSSD_CONF")" -eq 1 ]; then
+    pass "shell-default re-run keeps a single override_shell"
+else
+    fail "shell-default re-run keeps a single override_shell [rc=$rc]"
+fi
+SHELL_DEFAULT="/nonexistent/sh"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ]; then
+    pass "shell-default refuses a missing shell"
+else
+    fail "shell-default refuses a missing shell"
+fi
+
+# --- 23. ssh-publish uploads host keys to the IPA entry ---------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="ssh-publish"
+SSH_HOST_KEY_DIR="$TMP/sshkeys"
+mkdir -p "$SSH_HOST_KEY_DIR"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest1 root@host\n' > "$SSH_HOST_KEY_DIR/ssh_host_ed25519_key.pub"
+printf 'ssh-rsa AAAAB3NzaC1yc2EAAAADAtest2 root@host\n' > "$SSH_HOST_KEY_DIR/ssh_host_rsa_key.pub"
+HOST_KEYTAB="$TMP/krb5.keytab"
+: > "$HOST_KEYTAB"
+CLIENT_FQDN="client.example.com"
+IPA_REALM="EXAMPLE.COM"
+DRY_RUN="no"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "kinit -k .* host/client.example.com@EXAMPLE.COM" "$STUB_LOG" \
+    && grep -q "ipa host-mod client.example.com .*--sshpubkey=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest1" "$STUB_LOG" \
+    && grep -q -- "--sshpubkey=ssh-rsa AAAAB3NzaC1yc2EAAAADAtest2" "$STUB_LOG" \
+    && grep -q "cc=FILE:$TMP/krb5cc_sshpub_" "$STUB_LOG" \
+    && [ -z "$(ls "$TMP"/krb5cc_sshpub_* 2>/dev/null)" ] \
+    && [ -z "${KRB5CCNAME:-}" ]; then
+    pass "ssh-publish publishes all host keys via host kinit, cleans ccache"
+else
+    fail "ssh-publish publishes all host keys via host kinit, cleans ccache [rc=$rc]"
+fi
+SSH_HOST_KEY_DIR="$TMP/emptykeys"
+mkdir -p "$SSH_HOST_KEY_DIR"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ]; then
+    pass "ssh-publish skips cleanly with no host keys"
+else
+    fail "ssh-publish skips cleanly with no host keys [rc=$rc]"
+fi
+
+# --- 24. autofs enables IPA automount in sssd --------------------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="autofs"
+SSSD_CONF="$TMP/sssd-autofs.conf"
+IPA_DOMAIN="example.com"; IPA_REALM="EXAMPLE.COM"; CLIENT_FQDN="client.example.com"
+IPA_SERVER="idm.example.com"; ENABLE_SUDO="yes"; ENABLE_HBAC="yes"; ENUMERATE="no"
+DRY_RUN="no"
+write_sssd_conf
+rm -f "$STUB_LOG"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "^services = nss, pam, ssh, sudo, autofs$" "$SSSD_CONF" \
+    && grep -q "^autofs_provider = ipa$" "$SSSD_CONF" \
+    && grep -q "^\[autofs\]$" "$SSSD_CONF" \
+    && grep -q "sysrc automountd_enable=YES" "$STUB_LOG" \
+    && grep -q "sysrc autofs_enable=YES" "$STUB_LOG"; then
+    pass "autofs wires sssd provider, section, and services"
+else
+    fail "autofs wires sssd provider, section, and services [rc=$rc]"
+fi
+rm -f "$STUB_LOG"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && [ "$(grep "^services" "$SSSD_CONF" | grep -c "autofs")" -eq 1 ] \
+    && [ "$(grep -c "^autofs_provider" "$SSSD_CONF")" -eq 1 ]; then
+    pass "autofs re-run is idempotent"
+else
+    fail "autofs re-run is idempotent [rc=$rc]"
+fi
+
+# --- 25. skel-kde seeds KDE defaults and pins skeldir -------------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="skel-kde"
+SKEL_DIR="$TMP/skel"
+SKEL_PAM_FILES="$TMP/skel.pam"
+DRY_RUN="no"
+printf 'auth\trequired\tpam_unix.so\t\tno_warn try_first_pass nullok\nsession\t\trequired\t/usr/local/lib/pam_mkhomedir.so\t\tmode=0700\n' > "$TMP/skel.pam"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] \
+    && grep -q "^ColorScheme=Breeze$" "$SKEL_DIR/.config/kdeglobals" \
+    && grep -q "^Theme=breeze$" "$SKEL_DIR/.config/kdeglobals" \
+    && grep -q "pam_mkhomedir.so.*skeldir=$TMP/skel" "$TMP/skel.pam"; then
+    pass "skel-kde seeds kdeglobals and pins skeldir on pam_mkhomedir"
+else
+    fail "skel-kde seeds kdeglobals and pins skeldir on pam_mkhomedir [rc=$rc]"
+fi
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(grep -c "skeldir=" "$TMP/skel.pam")" -eq 1 ]; then
+    pass "skel-kde re-run pins skeldir once"
+else
+    fail "skel-kde re-run pins skeldir once [rc=$rc]"
+fi
+
+# --- 26. firefox-sso writes Kerberos SSO policy --------------------------------
+reset_stubs
+PLUGIN_DIR="$ROOT/scripts"
+PLUGINS="firefox-sso"
+FIREFOX_DIR="$TMP/ff"
+mkdir -p "$FIREFOX_DIR"
+IPA_DOMAIN="example.com"
+IPA_SSO_DOMAINS="example.com, ipa.example.com"
+DRY_RUN="no"
+( run_plugins ); rc=$?
+_pol="$FIREFOX_DIR/distribution/policies.json"
+if [ "$rc" -eq 0 ] \
+    && grep -q '"SPNEGO": \["example.com", "ipa.example.com"\]' "$_pol" \
+    && grep -q '"Delegated": \["example.com", "ipa.example.com"\]' "$_pol"; then
+    pass "firefox-sso writes SPNEGO+Delegated policy for the domains"
+else
+    fail "firefox-sso writes SPNEGO+Delegated policy for the domains [rc=$rc]"
+fi
+_before="$(cat "$_pol")"
+( run_plugins ); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$_pol")" = "$_before" ]; then
+    pass "firefox-sso re-run leaves a managed policy alone"
+else
+    fail "firefox-sso re-run leaves a managed policy alone [rc=$rc]"
+fi
+printf '{"policies": {"Homepage": {"URL": "https://x/"}}}\n' > "$_pol"
+( run_plugins ) 2>/dev/null; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "Homepage" "$_pol"; then
+    pass "firefox-sso refuses to clobber an unmanaged policy"
+else
+    fail "firefox-sso refuses to clobber an unmanaged policy [rc=$rc]"
+fi
+unset IPA_SSO_DOMAINS FIREFOX_DIR || true
 
 printf '\n%d failure(s)\n' "$fails"
 exit "$fails"
