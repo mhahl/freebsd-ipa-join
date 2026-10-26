@@ -254,20 +254,39 @@ sudo_pkg() {
     # preferred sudo flavor for the current config: only the sssd flavor can
     # read sudoers rules from SSSD (plain security/sudo cannot).
     if [ "$ENABLE_SUDO" = "yes" ]; then
-        printf 'security/sudo-sssd'
+        printf 'sudo-sssd'
     else
         printf 'security/sudo'
     fi
 }
 
+pkg_name_of() { # $1=origin-or-name -> bare package name for `pkg info -e`
+    _s="$1"
+    case "$_s" in */*) _s="${_s##*/}" ;; esac
+    case "$_s" in *@*) _s="${_s%%@*}" ;; esac
+    printf '%s' "$_s"
+}
+
 install_pkg_candidates() {
     # install the first available of the given pkg names (newest name first,
     # older fallbacks after); repo snapshots vary in what they carry.
+    # NOTE: pkg(8) exits 0 even when a name matches nothing
+    # ("No packages available to install matching ..."), so a bare exit
+    # status cannot tell "already installed" from "not found". Verify with
+    # `pkg info -e` instead, so a no-match falls through to the next
+    # candidate instead of silently installing nothing.
     for _p in "$@"; do
         if run_or_dry pkg install -y "$_p"; then
-            return 0
+            if [ "$DRY_RUN" = "yes" ]; then
+                return 0
+            fi
+            if pkg info -e "$(pkg_name_of "$_p")" >/dev/null 2>&1; then
+                return 0
+            fi
+            log "warning: package $_p not in repos (nothing installed); trying alternative"
+        else
+            log "warning: package $_p not in repos; trying alternative"
         fi
-        log "warning: package $_p not in repos; trying alternative"
     done
     return 1
 }
@@ -298,7 +317,7 @@ ensure_sudo_sss() {
         return 0
     fi
     log "sudo lacks SSSD support; reinstalling from pkg ..."
-    install_pkg_candidates security/sudo-sssd security/sudo || true
+    install_pkg_candidates sudo-sssd security/sudo || true
     if sudo_supports_sss; then
         log "sudo now supports SSSD"
         return 0
@@ -313,30 +332,48 @@ install_packages() {
     # sssd2 carries the IPA provider (sssd-1.x is gone from ports);
     # sudo comes in default/sssd flavors, and only the sssd flavor reads
     # sudoers from SSSD (verified after install by ensure_sudo_sss).
-    # devel/gettext-tools provides envsubst, which renders templates/.
+    # Each package is installed separately (not one atomic transaction):
+    # a single renamed/missing port must not abort the whole set and --
+    # worse -- pkg exits 0 on "No packages available", so an atomic call
+    # would silently install nothing while looking successful.
     run_or_dry pkg update
-    # shellcheck disable=SC2086
-    run_or_dry pkg install -y \
-        security/sssd2 \
-        net/openldap26-client \
-        security/pam_mkhomedir \
-        security/krb5 \
-        security/ca_root_nss \
-        net/freeipa-client \
-        devel/gettext-tools \
-        bind-tools
+    install_pkg_candidates security/sssd2 \
+        || die "sssd2 failed to install; check pkg output above"
+    # openldap client is version-pinned per snapshot (25/26/27/...); take
+    # whatever the repos carry. The legacy net/ category prefix still
+    # resolves today but databases/ is canonical.
+    install_pkg_candidates databases/openldap27-client databases/openldap26-client databases/openldap25-client net/openldap26-client \
+        || die "no LDAP client package installable; check pkg repos"
+    install_pkg_candidates security/pam_mkhomedir \
+        || die "pam_mkhomedir failed to install; check pkg output above"
+    install_pkg_candidates security/krb5 \
+        || die "krb5 failed to install; check pkg output above"
+    install_pkg_candidates security/ca_root_nss \
+        || die "ca_root_nss failed to install; check pkg output above"
+    install_pkg_candidates net/freeipa-client \
+        || die "freeipa-client failed to install; check pkg output above"
+    # devel/gettext-tools provides envsubst, which renders templates/.
+    install_pkg_candidates devel/gettext-tools \
+        || die "gettext-tools failed to install; check pkg output above"
+    install_pkg_candidates dns/bind-tools bind-tools \
+        || die "bind-tools failed to install; check pkg output above"
     # names below vary across repo snapshots (flavors, renames); take the
     # first candidate that installs, fail clearly when none does.
     if [ "$ENABLE_SUDO" = "yes" ]; then
-        install_pkg_candidates security/sudo-sssd security/sudo \
+        install_pkg_candidates sudo-sssd security/sudo \
             || die "no sudo package installable (tried sudo-sssd, sudo); check pkg repos"
     else
         run_or_dry pkg install -y security/sudo
     fi
     install_pkg_candidates security/cyrus-sasl2-gssapi security/cyrus-sasl-gssapi \
         || die "no SASL GSSAPI package installable; check pkg repos"
-    if ! pkg info -x '^sssd' >/dev/null 2>&1 && [ "$DRY_RUN" = "no" ]; then
-        die "sssd2 failed to install; check pkg output above"
+    # exact exists check (no regex): precise across pkg versions, and it
+    # cannot mistake a similarly-named package for the daemon itself.
+    if [ "$DRY_RUN" = "no" ]; then
+        if ! pkg info -e sssd2 >/dev/null 2>&1 \
+            && ! pkg info -e sssd >/dev/null 2>&1; then
+            die "sssd2 failed to install; check pkg output above"
+        fi
     fi
     # net/freeipa-client provides ipa + ipa-getkeytab for auto enrollment
     if ! have_cmd ipa-getkeytab && [ "$DRY_RUN" = "no" ]; then
