@@ -91,6 +91,11 @@ render_template() { # $1=template name $2=dest [$3='$A $B...'] [$4=mode]
     cat "$_rt_tmp" > "$2" # truncate+write keeps the live inode/owner
     rm -f "$_rt_tmp"
     chmod "${4:-644}" "$2"
+    # Prove the bytes stuck: re-verify the LIVE file, so a silent write
+    # failure can never report success. The byte count in the log is
+    # ground truth for every run's output.
+    verify_rendered "$1" "$2"
+    log "installed $2 ($(wc -c < "$2") bytes)"
 }
 
 # Die unless the just-rendered file looks right for its template. This is
