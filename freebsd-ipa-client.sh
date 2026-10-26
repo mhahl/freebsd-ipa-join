@@ -674,22 +674,6 @@ write_sssd_conf() {
     # (directive above covers this whole if; shellcheck scopes disables to one command)    render_template sssd.conf "$SSSD_CONF" '$IPA_DOMAIN $ACCESS_PROVIDER $SUDO_PROVIDER $IPA_REALM $CLIENT_FQDN $IPA_SERVER $CA_CRT $HOST_KEYTAB $ENUMERATE $SSSD_SERVICES' 600
     chown root:wheel "$SSSD_CONF" 2>/dev/null \
         || log "warning: chown root:wheel failed (continuing; ensure root owns $SSSD_CONF)"
-    # Fail loudly here, not at sssd startup: a missing/empty domain section
-    # makes sssd exit with "No domains configured" (seen when enrollment
-    # aborted before writing configs and a stale sssd.conf was left behind).
-    # Echo what the file holds so the cause (stale file vs unsubstituted
-    # placeholders) is visible without another round-trip. sssd.conf carries
-    # no secrets, so printing its domain lines is safe.
-    _sssd_got="$(grep -n 'domain' "$SSSD_CONF" || true)"
-    grep -q "^\[domain/${IPA_DOMAIN}\]" "$SSSD_CONF" \
-        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; domain lines present:${_sssd_got:- <none>} (TEMPLATE_DIR=$TEMPLATE_DIR -- git pull / re-copy the tree so templates/ matches this repo)"
-    grep -q '^domains *= *[^ #]' "$SSSD_CONF" \
-        || die "rendered $SSSD_CONF has an empty 'domains' line; refusing to continue"
-    # This template has no legitimate '$' left after rendering (every $ is
-    # a placeholder); leftovers mean envsubst did not substitute.
-    _sssd_vars="$(grep -n '\$' "$SSSD_CONF" || true)"
-    [ -z "$_sssd_vars" ] \
-        || die "rendered $SSSD_CONF has unsubstituted template variables; refusing to continue: ${_sssd_vars}"
 }
 
 configure_nsswitch() {
@@ -918,6 +902,10 @@ main() {
         esac
     done
 
+    # Fail before touching the system when the template tree is stale,
+    # half-copied, or overridden to somewhere foreign: every render below
+    # would otherwise "succeed" on the wrong input.
+    verify_template_tree
     prechecks
     t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nExisting desktop (LightDM/KDE): untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
 

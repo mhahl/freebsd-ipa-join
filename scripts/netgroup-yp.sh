@@ -68,6 +68,7 @@ if ! command -V render_template 2>/dev/null | grep -q 'function'; then
     _rd="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
     # shellcheck source=render.sh
     . "$_rd/render.sh"
+    verify_template_tree
 fi
 
 # shellcheck disable=SC2034  # reached via the render_template var list below
