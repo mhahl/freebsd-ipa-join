@@ -671,7 +671,8 @@ write_sssd_conf() {
     else
         SSSD_SERVICES="nss, pam, ssh"; SUDO_PROVIDER="# disabled"
     fi
-    # (directive above covers this whole if; shellcheck scopes disables to one command)    render_template sssd.conf "$SSSD_CONF" '$IPA_DOMAIN $ACCESS_PROVIDER $SUDO_PROVIDER $IPA_REALM $CLIENT_FQDN $IPA_SERVER $CA_CRT $HOST_KEYTAB $ENUMERATE $SSSD_SERVICES' 600
+    # shellcheck disable=SC2034,SC2086  # vars reached via the render_template var list
+    render_template sssd.conf "$SSSD_CONF" '$IPA_DOMAIN $ACCESS_PROVIDER $SUDO_PROVIDER $IPA_REALM $CLIENT_FQDN $IPA_SERVER $CA_CRT $HOST_KEYTAB $ENUMERATE $SSSD_SERVICES' 600
     chown root:wheel "$SSSD_CONF" 2>/dev/null \
         || log "warning: chown root:wheel failed (continuing; ensure root owns $SSSD_CONF)"
     log "sssd: [domain/$IPA_DOMAIN] services=${SSSD_SERVICES} access=${ACCESS_PROVIDER}"
@@ -746,10 +747,31 @@ enable_services() {
     log "== enabling services =="
     run_or_dry sysrc sssd_enable=YES
     if [ "$DRY_RUN" = "no" ]; then
+        # Re-assert the config at the moment of truth: a clobbered or
+        # reverted sssd.conf must never reach sssd. Idempotent: the
+        # render only rewrites when verified, and verify re-reads disk.
+        write_sssd_conf
         rm -rf /var/db/sss/db/* 2>/dev/null || true
         service sssd restart || service sssd start
-        sleep 2
-        service sssd status || log "warning: sssd not running; see /var/log/sssd/"
+        _sssd_up=no
+        for _try in 1 2 3 4 5; do
+            if [ -s /var/run/sssd.pid ] && kill -0 "$(cat /var/run/sssd.pid)" 2>/dev/null; then
+                _sssd_up=yes
+                break
+            fi
+            sleep 2
+        done
+        if [ "$_sssd_up" = "no" ]; then
+            # Surface the daemon's own words: silently continuing leaves
+            # a broken enrollment that looks finished.
+            log "sssd failed to start; last lines of /var/log/sssd/sssd.log:"
+            tail -30 /var/log/sssd/sssd.log 2>/dev/null || true
+            die "sssd did not start; see the log above (start it with: service sssd start)"
+        fi
+        # Final proof: the file sssd read is ours, right now.
+        grep -q "^\[domain/${IPA_DOMAIN}\]" "$SSSD_CONF" \
+            || die "sssd.conf lost its [domain/$IPA_DOMAIN] section during startup; refusing to continue"
+        log "sssd: running (pid $(cat /var/run/sssd.pid)) with [domain/$IPA_DOMAIN]"
     fi
 }
 
