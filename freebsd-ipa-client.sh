@@ -267,6 +267,15 @@ pkg_name_of() { # $1=origin-or-name -> bare package name for `pkg info -e`
     printf '%s' "$_s"
 }
 
+pkg_any_installed() { # $@=bare pkg names -> 0 when any one is installed
+    for _q in "$@"; do
+        if pkg info -e "$_q" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 install_pkg_candidates() {
     # install the first available of the given pkg names (newest name first,
     # older fallbacks after); repo snapshots vary in what they carry.
@@ -275,14 +284,35 @@ install_pkg_candidates() {
     # status cannot tell "already installed" from "not found". Verify with
     # `pkg info -e` instead, so a no-match falls through to the next
     # candidate instead of silently installing nothing.
+    # SKIP: when any candidate's package is already present (usually pulled
+    # in as a dependency of an earlier install), do nothing. Forcing a
+    # same-file sibling (openldap27 over 26, krb5 over krb5-ldap) makes the
+    # solver deinstall whatever depends on the present one -- e.g. asking
+    # for openldap27-client deinstalls sssd2. sssd2 is installed first
+    # precisely so its dependency closure picks the working set.
+    # Set PKG_SKIP_PRESENT=no to force (re)install anyway (see the sudo
+    # flavor switch in ensure_sudo_sss, which must replace plain sudo).
+    if [ "${PKG_SKIP_PRESENT:-yes}" = "yes" ]; then
+        for _p in "$@"; do
+            if pkg info -e "$(pkg_name_of "$_p")" >/dev/null 2>&1; then
+                log "package $(pkg_name_of "$_p") already installed; skipping"
+                return 0
+            fi
+        done
+    fi
     for _p in "$@"; do
         if run_or_dry pkg install -y "$_p"; then
             if [ "$DRY_RUN" = "yes" ]; then
                 return 0
             fi
-            if pkg info -e "$(pkg_name_of "$_p")" >/dev/null 2>&1; then
-                return 0
-            fi
+            # accept any candidate: one origin can resolve to a same-file
+            # sibling (security/krb5 -> krb5-ldap), so only the tried name
+            # being present is too narrow a check.
+            for _q in "$@"; do
+                if pkg info -e "$(pkg_name_of "$_q")" >/dev/null 2>&1; then
+                    return 0
+                fi
+            done
             log "warning: package $_p not in repos (nothing installed); trying alternative"
         else
             log "warning: package $_p not in repos; trying alternative"
@@ -317,7 +347,12 @@ ensure_sudo_sss() {
         return 0
     fi
     log "sudo lacks SSSD support; reinstalling from pkg ..."
+    # force reinstall: plain sudo IS installed here, which is exactly why
+    # the default skip-if-present must not apply.
+    _sss_skip="${PKG_SKIP_PRESENT:-yes}"
+    PKG_SKIP_PRESENT=no
     install_pkg_candidates sudo-sssd security/sudo || true
+    PKG_SKIP_PRESENT="$_sss_skip"
     if sudo_supports_sss; then
         log "sudo now supports SSSD"
         return 0
@@ -346,7 +381,10 @@ install_packages() {
         || die "no LDAP client package installable; check pkg repos"
     install_pkg_candidates security/pam_mkhomedir \
         || die "pam_mkhomedir failed to install; check pkg output above"
-    install_pkg_candidates security/krb5 \
+    # krb5 vs krb5-ldap are same-file siblings: one origin can resolve to
+    # either, and sssd2's install already picks one. The skip-if-present
+    # above keeps us from flipping it back and forth.
+    install_pkg_candidates security/krb5 security/krb5-ldap \
         || die "krb5 failed to install; check pkg output above"
     install_pkg_candidates security/ca_root_nss \
         || die "ca_root_nss failed to install; check pkg output above"
