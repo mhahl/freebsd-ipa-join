@@ -1,10 +1,15 @@
 #!/bin/sh
 # render.sh -- template rendering for freebsd-ipa-client.sh and its plugins.
 #
-# The main script sources this file at startup; a plugin sources it only
-# when run standalone, that is when the main script did not already define
-# render_template. $0 is the main script in the first case and the plugin
-# in the second; both live in fixed spots relative to templates/.
+# The main script sources this file at startup after exporting TEMPLATE_DIR
+# (resolved from its own SCRIPT_DIR); a plugin sources it only when run
+# standalone, that is when the main script did not already define
+# render_template.
+#
+# Resolution order: an exported TEMPLATE_DIR always wins; otherwise assume
+# ./templates (running from the repo root); otherwise resolve relative to
+# the invoking script, which covers standalone plugin runs from elsewhere
+# (scripts/ -> ../templates).
 #
 # Convention: templates/<name> holds the full content of one generated
 # file. Placeholders use shell syntax ($VAR or ${VAR}) and render with an
@@ -12,7 +17,12 @@
 # code in generated scripts) passes through untouched. Templates without
 # placeholders copy byte-identical.
 
-TEMPLATE_DIR="${TEMPLATE_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")/../templates" && pwd -P)}"
+if [ -z "${TEMPLATE_DIR:-}" ]; then
+    TEMPLATE_DIR=./templates
+    if [ ! -d "$TEMPLATE_DIR" ]; then
+        TEMPLATE_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")/../templates" && pwd -P)"
+    fi
+fi
 
 render_template() { # $1=template name $2=dest [$3='$A $B...'] [$4=mode]
     _rt_tpl="$TEMPLATE_DIR/$1"

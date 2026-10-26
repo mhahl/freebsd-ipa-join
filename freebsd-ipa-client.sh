@@ -39,6 +39,10 @@ NSSWITCH_CONF="/etc/nsswitch.conf"
 HOSTS_FILE="/etc/hosts"
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 PLUGIN_DIR="${PLUGIN_DIR:-$SCRIPT_DIR/scripts}"
+# Templates ship at the repo root. An exported TEMPLATE_DIR always wins
+# (lets callers point at a staged copy); otherwise resolve from SCRIPT_DIR
+# so the main script works no matter where it is invoked from.
+TEMPLATE_DIR="${TEMPLATE_DIR:-$SCRIPT_DIR/templates}"
 # shellcheck source=scripts/render.sh
 . "$SCRIPT_DIR/scripts/render.sh"
 
