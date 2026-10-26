@@ -682,7 +682,7 @@ write_sssd_conf() {
     # no secrets, so printing its domain lines is safe.
     _sssd_got="$(grep -n 'domain' "$SSSD_CONF" || true)"
     grep -q "^\[domain/${IPA_DOMAIN}\]" "$SSSD_CONF" \
-        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; domain lines present:${_sssd_got:- <none>}"
+        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; domain lines present:${_sssd_got:- <none>} (TEMPLATE_DIR=$TEMPLATE_DIR -- git pull / re-copy the tree so templates/ matches this repo)"
     grep -q '^domains *= *[^ #]' "$SSSD_CONF" \
         || die "rendered $SSSD_CONF has an empty 'domains' line; refusing to continue"
     # This template has no legitimate '$' left after rendering (every $ is
