@@ -31,7 +31,6 @@ if ! command -V render_template 2>/dev/null | grep -q 'function'; then
     _rd="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
     # shellcheck source=render.sh
     . "$_rd/render.sh"
-    verify_template_tree
 fi
 
 SKEL_DIR="${SKEL_DIR:-/etc/skel}"
