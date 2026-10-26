@@ -674,6 +674,7 @@ write_sssd_conf() {
     # (directive above covers this whole if; shellcheck scopes disables to one command)    render_template sssd.conf "$SSSD_CONF" '$IPA_DOMAIN $ACCESS_PROVIDER $SUDO_PROVIDER $IPA_REALM $CLIENT_FQDN $IPA_SERVER $CA_CRT $HOST_KEYTAB $ENUMERATE $SSSD_SERVICES' 600
     chown root:wheel "$SSSD_CONF" 2>/dev/null \
         || log "warning: chown root:wheel failed (continuing; ensure root owns $SSSD_CONF)"
+    log "sssd: [domain/$IPA_DOMAIN] services=${SSSD_SERVICES} access=${ACCESS_PROVIDER}"
 }
 
 configure_nsswitch() {

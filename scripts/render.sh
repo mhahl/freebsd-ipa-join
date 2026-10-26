@@ -61,8 +61,11 @@ render_template() { # $1=template name $2=dest [$3='$A $B...'] [$4=mode]
     fi
     command -v envsubst >/dev/null 2>&1 \
         || die "envsubst not found (pkg install devel/gettext-tools)"
-    backup_file "$2" || true
-    mkdir -p "$(dirname "$2")"
+    # Render to a staging file and verify BEFORE touching the destination:
+    # a bad render must never clobber a working config (a previous version
+    # wrote first and checked second, trashing sssd.conf with a sample).
+    # The staging file is left behind on failure for inspection.
+    _rt_tmp="$(mktemp "${TMPDIR:-/tmp}/render.XXXXXX")" || die "mktemp failed for $1"
     if [ -n "${3:-}" ]; then
         # envsubst only sees exported variables: export exactly the
         # listed names first, so a typo fails here instead of silently
@@ -78,12 +81,16 @@ render_template() { # $1=template name $2=dest [$3='$A $B...'] [$4=mode]
             eval "export $_rt_n"
         done
         # shellcheck disable=SC2086
-        envsubst "$3" < "$_rt_tpl" > "$2"
+        envsubst "$3" < "$_rt_tpl" > "$_rt_tmp"
     else
-        cp -p "$_rt_tpl" "$2"
+        cp -p "$_rt_tpl" "$_rt_tmp"
     fi
+    verify_rendered "$1" "$_rt_tmp"
+    backup_file "$2" || true
+    mkdir -p "$(dirname "$2")"
+    cat "$_rt_tmp" > "$2" # truncate+write keeps the live inode/owner
+    rm -f "$_rt_tmp"
     chmod "${4:-644}" "$2"
-    verify_rendered "$1" "$2"
 }
 
 # Die unless the just-rendered file looks right for its template. This is
