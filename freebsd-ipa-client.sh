@@ -674,6 +674,13 @@ write_sssd_conf() {
     # (directive above covers this whole if; shellcheck scopes disables to one command)    render_template sssd.conf "$SSSD_CONF" '$IPA_DOMAIN $ACCESS_PROVIDER $SUDO_PROVIDER $IPA_REALM $CLIENT_FQDN $IPA_SERVER $CA_CRT $HOST_KEYTAB $ENUMERATE $SSSD_SERVICES' 600
     chown root:wheel "$SSSD_CONF" 2>/dev/null \
         || log "warning: chown root:wheel failed (continuing; ensure root owns $SSSD_CONF)"
+    # Fail loudly here, not at sssd startup: a missing/empty domain section
+    # makes sssd exit with "No domains configured" (seen when enrollment
+    # aborted before writing configs and a stale sssd.conf was left behind).
+    grep -q "^\[domain/${IPA_DOMAIN}\]" "$SSSD_CONF" \
+        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; refusing to continue"
+    grep -q '^domains *= *[^ #]' "$SSSD_CONF" \
+        || die "rendered $SSSD_CONF has an empty 'domains' line; refusing to continue"
 }
 
 configure_nsswitch() {
