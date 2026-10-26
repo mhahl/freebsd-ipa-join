@@ -677,10 +677,19 @@ write_sssd_conf() {
     # Fail loudly here, not at sssd startup: a missing/empty domain section
     # makes sssd exit with "No domains configured" (seen when enrollment
     # aborted before writing configs and a stale sssd.conf was left behind).
+    # Echo what the file holds so the cause (stale file vs unsubstituted
+    # placeholders) is visible without another round-trip. sssd.conf carries
+    # no secrets, so printing its domain lines is safe.
+    _sssd_got="$(grep -n 'domain' "$SSSD_CONF" || true)"
     grep -q "^\[domain/${IPA_DOMAIN}\]" "$SSSD_CONF" \
-        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; refusing to continue"
+        || die "rendered $SSSD_CONF has no [domain/$IPA_DOMAIN] section; domain lines present:${_sssd_got:- <none>}"
     grep -q '^domains *= *[^ #]' "$SSSD_CONF" \
         || die "rendered $SSSD_CONF has an empty 'domains' line; refusing to continue"
+    # This template has no legitimate '$' left after rendering (every $ is
+    # a placeholder); leftovers mean envsubst did not substitute.
+    _sssd_vars="$(grep -n '\$' "$SSSD_CONF" || true)"
+    [ -z "$_sssd_vars" ] \
+        || die "rendered $SSSD_CONF has unsubstituted template variables; refusing to continue: ${_sssd_vars}"
 }
 
 configure_nsswitch() {
