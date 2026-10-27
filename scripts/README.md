@@ -7,15 +7,18 @@ plugins - optional post-enrollment steps for FreeBSD FreeIPA clients
 ## SYNOPSIS
 
 ```sh
-sudo sh freebsd-ipa-client.sh --plugins otp
-sudo sh freebsd-ipa-client.sh --plugins otp,other
+sudo sh freebsd-ipa-client.sh                  # otp + shell-default run by default
+sudo sh freebsd-ipa-client.sh --no-plugins     # no plugins at all
+sudo sh freebsd-ipa-client.sh --plugins autofs # defaults + extras
 sudo sh scripts/otp.sh                          # standalone run
 OTP_PAM_FILES=/tmp/test.pam DRY_RUN=yes sh scripts/otp.sh
 ```
 
 ## DESCRIPTION
 
-Each plugin runs after the base configuration is up. The main script
+Each plugin runs after the base configuration is up (before the sssd
+restart, so config edits such as `override_shell` apply immediately).
+The main script
 sources a plugin in a subshell: the plugin sees the helpers (`log`,
 `backup_file`, `render_template`) and the variables (`DRY_RUN`,
 `BACKUP_DIR`, `IPA_*`, `CLIENT_FQDN`) but cannot leak assignments
@@ -23,11 +26,15 @@ back. A nonzero exit aborts the whole run, so a failing plugin never
 leaves a half-applied extra. Every file a plugin writes comes from
 `templates/`, rendered with `envsubst`; see `templates/README.md`.
 
+`otp` and `shell-default` are enabled by default. `--plugins LIST`
+appends extras to the defaults; `--no-plugins` disables every plugin.
+
 ## PLUGINS
 
 ### otp
 
-Second-factor logins. The plugin rewrites `use_first_pass` to
+Second-factor logins. Enabled by default on new enrollments (disable
+with `--no-plugins`). The plugin rewrites `use_first_pass` to
 `forward_pass` on the system, sshd, sudo, and LightDM PAM stacks.
 `use_first_pass` never prompts, so when the KDC answers with an OTP
 challenge SSSD has nothing to reply with and the login dies with
@@ -71,13 +78,17 @@ Env: `NIS_DOMAIN`, `HOST_FQDN`, `IPA_SERVER`, `IPA_REALM`,
 
 ### shell-default
 
-Login shell for IPA users. Sets `override_shell` in `sssd.conf` so IPA
-users land in a real shell instead of `/bin/sh`. `SHELL_DEFAULT` is
-required and must name an installed shell as a full path; the plugin
-refuses to run otherwise. Takes effect after `service sssd restart`.
+Login shell for IPA users. Enabled by default on new enrollments
+(disable with `--no-plugins`). Sets `override_shell` in `sssd.conf` so
+IPA users land in bash instead of `/bin/sh`. `SHELL_DEFAULT` defaults
+to `/usr/local/bin/bash` and must name an installed shell as a full
+path; the plugin refuses to run otherwise. The main script installs
+`shells/bash` and restarts sssd after the plugin runs, so the override
+applies immediately after enrollment. Standalone runs need a manual
+`service sssd restart`.
 
-Env: `SHELL_DEFAULT`, `SSSD_CONF` (default
-`/usr/local/etc/sssd/sssd.conf`).
+Env: `SHELL_DEFAULT` (default `/usr/local/bin/bash`), `SSSD_CONF`
+(default `/usr/local/etc/sssd/sssd.conf`).
 
 ### ssh-publish
 

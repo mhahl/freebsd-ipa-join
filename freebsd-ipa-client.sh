@@ -12,6 +12,8 @@
 #  - wires up nsswitch.conf, PAM (system/sshd/sudo), SSH (GSSAPI + IPA user
 #    keys via sss_ssh_authorizedkeys), sudoers via SSSD
 #  - enables sssd, verifies with getent/id
+#  - runs the otp (2FA PAM) and shell-default (bash login shell) plugins by
+#    default; pass --no-plugins to disable, --plugins LIST to add extras
 #
 # Interactive setup uses plain stdin prompts (no dialog/TUI dependency).
 #
@@ -65,7 +67,10 @@ ENUMERATE="no"
 DRY_RUN="no"
 UNATTENDED="no"
 YES="no"
-PLUGINS=""               # comma-separated names from scripts/, via --plugins
+DEFAULT_PLUGINS="otp,shell-default"
+PLUGINS=""               # explicit extras via --plugins; defaults appended in main
+NO_PLUGINS="no"          # --no-plugins: run no plugins at all
+SHELL_DEFAULT="${SHELL_DEFAULT:-/usr/local/bin/bash}"   # shell-default plugin
 
 # ---------------------------------------------------------------- helpers ---
 
@@ -251,7 +256,8 @@ confirm_summary() {
   Plugins    : ${PLUGINS:-(none)}
 
 Packages will be installed, configs rewritten (backups in $BACKUP_DIR).
-Graphical (LightDM) and SSH logins keep working (see --plugins otp for 2FA)."
+Graphical (LightDM) and SSH logins keep working; 2FA (otp) and the bash
+login shell (shell-default) are on by default (--no-plugins to disable)."
     t_yesno "$sum" "Confirm"
 }
 
@@ -400,6 +406,10 @@ install_packages() {
         || die "gettext-tools failed to install; check pkg output above"
     install_pkg_candidates dns/bind-tools bind-tools \
         || die "bind-tools failed to install; check pkg output above"
+    # shells/bash is the default login shell for IPA users (shell-default
+    # plugin); the plugin refuses to run when the shell is missing.
+    install_pkg_candidates shells/bash \
+        || die "bash failed to install; check pkg output above"
     # names below vary across repo snapshots (flavors, renames); take the
     # first candidate that installs, fail clearly when none does.
     if [ "$ENABLE_SUDO" = "yes" ]; then
@@ -700,8 +710,9 @@ patch_pam_file() { # $1=pam file
     f="$1"
     [ -f "$f" ] || { log "skip missing $f"; return 0; }
     backup_file "$f"
-    # OTP/2FA prompting lives in the otp plugin (--plugins otp), not here:
-    # the base install stays single-prompt (use_first_pass).
+    # OTP/2FA prompting lives in the otp plugin (on by default; see
+    # --no-plugins), not here: the base install stays single-prompt
+    # (use_first_pass).
     if grep -q "pam_sss.so" "$f"; then
         log "$f already has pam_sss"
     else
@@ -761,12 +772,13 @@ enable_services() {
 }
 
 run_plugins() {
-    # Optional post-config steps from scripts/ (e.g. --plugins otp).
-    # Each plugin is sourced in a subshell: it sees the main script's helpers
-    # (log, backup_file) and variables (DRY_RUN, BACKUP_DIR, IPA_*, ...), but
-    # cannot leak assignments back. A failing plugin aborts the run so
-    # half-applied extras never go unnoticed. PLUGIN_DIR is overridable
-    # (overridable for dry-run/fixture use).
+    # Post-config steps from scripts/. Defaults (unless --no-plugins):
+    # otp + shell-default; --plugins LIST appends extras (it never drops
+    # the defaults). Each plugin is sourced in a subshell: it sees the main
+    # script's helpers (log, backup_file) and variables (DRY_RUN,
+    # BACKUP_DIR, IPA_*, ...), but cannot leak assignments back. A failing
+    # plugin aborts the run so half-applied extras never go unnoticed.
+    # PLUGIN_DIR is overridable (overridable for dry-run/fixture use).
     [ -z "${PLUGINS:-}" ] && return 0
     log "== running plugins: $PLUGINS =="
     _rest="$PLUGINS"
@@ -869,7 +881,9 @@ Options:
   --no-sudo            skip IPA sudo provider
   --permit             disable HBAC enforcement (access=permit, debug only)
   --enumerate          set enumerate=True (lists ALL users in getent; slow)
-  --plugins LIST       comma-separated extras from scripts/ (e.g. otp,netgroup-yp)
+  --plugins LIST       comma-separated extras from scripts/, added to the
+                       defaults otp,shell-default (e.g. netgroup-yp,autofs)
+  --no-plugins         run no plugins at all (disables the defaults too)
   --dry-run            print actions without changing the system
   --unattended         never prompt: fail if required inputs are missing
   --yes                skip the final confirmation
@@ -893,6 +907,7 @@ main() {
             --user) IPA_USER="$2"; shift 2 ;;
             --password) IPA_PASSWORD="$2"; shift 2 ;;
             --plugins) PLUGINS="$2"; shift 2 ;;
+            --no-plugins) NO_PLUGINS="yes"; shift ;;
             --auto) ENROLL_MODE="auto"; shift ;;
             --keytab-file) ENROLL_MODE="keytab-file"; KEYTAB_SRC="$2"; shift 2 ;;
             --keytab-url) ENROLL_MODE="keytab-url"; KEYTAB_SRC="$2"; shift 2 ;;
@@ -909,6 +924,14 @@ main() {
             *) die "unknown option: $1 (see --help)" ;;
         esac
     done
+
+    # defaults: otp + shell-default run unless --no-plugins; --plugins adds
+    # extras on top (it never silently drops the defaults).
+    if [ "$NO_PLUGINS" = "yes" ]; then
+        PLUGINS=""
+    else
+        PLUGINS="${PLUGINS:+$PLUGINS,}$DEFAULT_PLUGINS"
+    fi
 
     prechecks
     t_msg "This wizard enrolls FreeBSD in FreeIPA (users/groups via SSSD-IPA, HBAC access control, sudo rules).\n\nAutomatic mode adds this host server-side and pulls its keytab using the admin credentials you enter -- no manual steps on the IPA server.\n\nExisting desktop (LightDM/KDE): untouched except compatible PAM additions." "FreeIPA client for FreeBSD"
@@ -958,8 +981,10 @@ main() {
     write_sssd_conf
     configure_nsswitch
     configure_pam_ssh
-    enable_services
+    # plugins first: shell-default edits sssd.conf, and the restart below
+    # makes its override_shell apply right away instead of at next boot
     run_plugins
+    enable_services
 
     if verify; then
         t_msg "Enrolled OK.\n\nTest: ssh '$IPA_USER@$(hostname)' / id $IPA_USER / sudo -U $IPA_USER -l\nHBAC: grant this host access server-side or logins are denied (by design).\nSudo rules come from IPA (sudoers: sss). Logs: /var/log/sssd/." "Done"

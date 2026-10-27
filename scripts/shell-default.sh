@@ -1,14 +1,15 @@
 #!/bin/sh
 # plugin: shell-default -- default login shell for IPA users.
 #
-# Sets override_shell in sssd.conf so IPA users land in a real shell
+# Sets override_shell in sssd.conf so IPA users land in /usr/local/bin/bash
 # instead of /bin/sh. Refuses to run when the shell is not installed.
 #
-# Sourced by freebsd-ipa-client.sh:  --plugins shell-default
+# Sourced by freebsd-ipa-client.sh (on by default; disable with --no-plugins).
 # Also runs directly:
-#   sudo SHELL_DEFAULT=/usr/local/bin/bash sh scripts/shell-default.sh
-# Env: SHELL_DEFAULT (required, full path to an installed shell),
-#      SSSD_CONF (default /usr/local/etc/sssd/sssd.conf).
+#   sudo sh scripts/shell-default.sh
+#   sudo SHELL_DEFAULT=/usr/local/bin/zsh sh scripts/shell-default.sh
+# Env: SHELL_DEFAULT (default /usr/local/bin/bash, full path to an installed
+#      shell), SSSD_CONF (default /usr/local/etc/sssd/sssd.conf).
 # Takes effect after sssd restart:  service sssd restart
 
 # command -v is not enough: macOS ships /usr/bin/log, so require a shell
@@ -26,16 +27,16 @@ if ! command -V backup_file 2>/dev/null | grep -q 'function'; then
     }
 fi
 
-SHELL_DEFAULT="${SHELL_DEFAULT:-}"
+SHELL_DEFAULT="${SHELL_DEFAULT:-/usr/local/bin/bash}"
 SSSD_CONF="${SSSD_CONF:-/usr/local/etc/sssd/sssd.conf}"
 
 [ -n "$SHELL_DEFAULT" ] || { log "plugin shell-default: error: set SHELL_DEFAULT=/path/to/shell (e.g. SHELL_DEFAULT=/usr/local/bin/bash)"; exit 1; }
-[ -x "$SHELL_DEFAULT" ] || { log "plugin shell-default: error: $SHELL_DEFAULT not installed (pkg install shells/bash?)"; exit 1; }
-[ -f "$SSSD_CONF" ] || { log "plugin shell-default: error: $SSSD_CONF missing (enroll this host first?)"; exit 1; }
 if [ "${DRY_RUN:-no}" = "yes" ]; then
     log "[dry-run] plugin shell-default: override_shell = $SHELL_DEFAULT in $SSSD_CONF"
     exit 0
 fi
+[ -x "$SHELL_DEFAULT" ] || { log "plugin shell-default: error: $SHELL_DEFAULT not installed (pkg install shells/bash?)"; exit 1; }
+[ -f "$SSSD_CONF" ] || { log "plugin shell-default: error: $SSSD_CONF missing (enroll this host first?)"; exit 1; }
 backup_file "$SSSD_CONF" || true
 if grep -q "^override_shell" "$SSSD_CONF"; then
     sed -i '' -E "s|^override_shell.*|override_shell = $SHELL_DEFAULT|" "$SSSD_CONF"

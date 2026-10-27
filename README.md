@@ -16,6 +16,8 @@ sudo sh freebsd-ipa-client.sh --unattended --server SERVER --domain DOMAIN \
 
 Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa host-add`) and pulls its keytab (`ipa-getkeytab`) with the credentials you enter at setup. No manual steps on the IPA server.
 
+The `otp` (2FA PAM) and `shell-default` (bash login shell) plugins run by default; `--plugins` adds extras without dropping them, and `--no-plugins` turns plugins off entirely.
+
 ## OPTIONS
 
 ```text
@@ -30,8 +32,10 @@ Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa 
 --keytab-file PATH Keytab exported on the IPA server.
 --keytab-url URL   Keytab fetched over http(s). Remove from web root after.
 --otp OTP          One-time host password (host pre-created with OTP).
---plugins LIST     Comma-separated extras from scripts/: otp, netgroup-yp,
-                   shell-default, ssh-publish, autofs, skel-kde, firefox-sso.
+--plugins LIST     Comma-separated extras from scripts/, added to the
+                   defaults otp,shell-default: netgroup-yp, ssh-publish,
+                   autofs, skel-kde, firefox-sso.
+--no-plugins       Run no plugins at all (disables the defaults too).
 --no-mkhomedir     Do not create home dirs on first login.
 --no-sudo          Skip IPA sudo provider (installs plain sudo).
 --permit           Disable HBAC enforcement. Debug only.
@@ -51,7 +55,7 @@ Configures SSSD + Kerberos + LDAP. Default mode adds the host server-side (`ipa 
 sudo sh freebsd-ipa-client.sh
 sudo sh freebsd-ipa-client.sh --unattended --server idm.example.com \
   --domain example.com --hostname client.example.com \
-  --user admin --password '...' --plugins otp
+  --user admin --password '...' --plugins autofs,skel-kde
 sudo sh scripts/otp.sh                     # standalone plugin run
 id admin && getent passwd admin            # verify NSS
 sudo -U admin -l                           # verify IPA sudo rules
