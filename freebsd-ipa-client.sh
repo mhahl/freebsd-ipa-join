@@ -9,7 +9,8 @@
 #    the host keytab (ipa-getkeytab) using the admin credentials asked for
 #    during setup -- no manual server-side steps needed
 #  - writes krb5.conf, ldap.conf, sssd.conf (ipa provider: users/groups, HBAC, sudo)
-#  - wires up nsswitch.conf, PAM (system/sshd/sudo), SSH (GSSAPI), sudoers via SSSD
+#  - wires up nsswitch.conf, PAM (system/sshd/sudo), SSH (GSSAPI + IPA user
+#    keys via sss_ssh_authorizedkeys), sudoers via SSSD
 #  - enables sssd, verifies with getent/id
 #
 # Interactive setup uses plain stdin prompts (no dialog/TUI dependency).
@@ -732,10 +733,18 @@ configure_pam_ssh() {
         log "linked sudo PAM to system PAM (with sss)"
     fi
     # SSH GSSAPI for SSO + UsePAM so HBAC/sudo/session rules apply
+    backup_file /etc/ssh/sshd_config
     grep -q "^GSSAPIAuthentication" /etc/ssh/sshd_config \
         || printf '\nGSSAPIAuthentication yes\n' >> /etc/ssh/sshd_config
     grep -q "^UsePAM" /etc/ssh/sshd_config \
         || printf 'UsePAM yes\n' >> /etc/ssh/sshd_config
+    # IPA users' SSH keys live in LDAP (ipasshpubkey), not in local
+    # ~/.ssh/authorized_keys: serve them at login through sssd's ssh
+    # responder, exactly like ipa-client-install does on Linux.
+    grep -q "^AuthorizedKeysCommand" /etc/ssh/sshd_config \
+        || printf 'AuthorizedKeysCommand /usr/local/bin/sss_ssh_authorizedkeys\n' >> /etc/ssh/sshd_config
+    grep -q "^AuthorizedKeysCommandUser" /etc/ssh/sshd_config \
+        || printf 'AuthorizedKeysCommandUser nobody\n' >> /etc/ssh/sshd_config
     grep -q "GSSAPIAuthentication" /etc/ssh/ssh_config 2>/dev/null \
         || printf '\nGSSAPIAuthentication yes\n' >> /etc/ssh/ssh_config
     # /home -> /usr/home compat (FreeBSD home root)

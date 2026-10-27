@@ -67,7 +67,7 @@ rendered with `envsubst` at install time.
 /etc/krb5.conf                     realm, KDC, host keytab location
 /etc/nsswitch.conf                 passwd/group/sudoers: files sss
 /etc/pam.d/system, sshd, sudo      pam_sss + pam_mkhomedir
-/etc/ssh/sshd_config, ssh_config   GSSAPI enabled
+/etc/ssh/sshd_config, ssh_config   GSSAPI; UserKeys via sss_ssh_authorizedkeys
 /etc/hosts                         FQDN entry; sets system hostname to FQDN
 /usr/local/etc/ipa/ca.crt          IPA CA certificate
 /usr/local/etc/ipa/krb5.keytab     host keytab, 0600
